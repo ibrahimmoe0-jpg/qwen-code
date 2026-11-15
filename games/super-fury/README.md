@@ -4,6 +4,6 @@ An unofficial, non-commercial fan game in the style of _Dragon Ball Z: Buu's Fur
 
 - **Sagas**: Battle of Gods, Resurrection 'F', Universe 6 Tournament, Future Trunks, Tournament of Power
 - **Controls**: WASD/Arrows move, J punch, K ki blast (hold for Kamehameha), L dash, F fly, Space charge ki, T transform, Tab stat points, Enter talk/continue
-- **Progression**: EXP and levels with Strength / Power / Endurance / Speed points; Super Saiyan from the start, God, Blue and Ultra Instinct unlocked as the story reaches them
+- **Progression**: EXP and levels with Strength / Power / Endurance / Speed points; Super Saiyan and Super Saiyan 3 from the start, God, Blue and Ultra Instinct unlocked as the story reaches them
 
-Goku's sprites are from the GBA game (ripped by Grim, sdb.neuropod.net); all other pixel art is original. Dragon Ball is a trademark of its respective owners.
+Goku's sprites and the dialog portraits are from the GBA game, via spritedatabase.net: base Goku ripped by Grim, Super Saiyan by ApplePie, Super Saiyan 3 by Dx-Yondy, portraits by Omega. God, Blue, Ultra Instinct and Goku Black are palette swaps of those sheets. All other pixel art is original. Dragon Ball is a trademark of its respective owners.
