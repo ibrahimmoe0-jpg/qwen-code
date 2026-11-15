@@ -1374,35 +1374,62 @@
               auraC: light.map((c) => Math.min(255, c + 90)),
             };
           const out = new Uint8ClampedArray(src);
-          for (const [fx, fy, fw, fh] of GOKU_FRAMES) {
+          GOKU_FRAMES.forEach(([fx, fy, fw, fh], id) => {
             const at = (x, y) => {
               if (x < fx || y < fy || x >= fx + fw || y >= fy + fh) return null;
               const i = (y * w + x) * 4;
               return src[i + 3] ? [src[i], src[i + 1], src[i + 2]] : null;
             };
+            const isBlack = (p) => p && p[0] === 0 && p[1] === 0 && p[2] === 0;
+            const isWhite = (p) =>
+              p && p[0] === 248 && p[1] === 248 && p[2] === 248;
+            // hair = black components that reach the upper part of the frame; soles and pupils are left alone
+            const hair = new Set(),
+              seen = new Set();
+            for (let y = fy; y < fy + fh; y++)
+              for (let x = fx; x < fx + fw; x++) {
+                const k0 = y * w + x;
+                if (seen.has(k0) || !isBlack(at(x, y))) continue;
+                const comp = [],
+                  stack = [[x, y]];
+                seen.add(k0);
+                let top = y;
+                while (stack.length) {
+                  const [cx, cy] = stack.pop();
+                  comp.push(cy * w + cx);
+                  top = Math.min(top, cy);
+                  for (const [nx, ny] of [
+                    [cx + 1, cy],
+                    [cx - 1, cy],
+                    [cx, cy + 1],
+                    [cx, cy - 1],
+                  ]) {
+                    const k = ny * w + nx;
+                    if (!seen.has(k) && isBlack(at(nx, ny))) {
+                      seen.add(k);
+                      stack.push([nx, ny]);
+                    }
+                  }
+                }
+                if (top < fy + fh * 0.45) for (const k of comp) hair.add(k);
+              }
+            const transformFrame = id >= 124 && id <= 135;
             for (let y = fy; y < fy + fh; y++)
               for (let x = fx; x < fx + fw; x++) {
                 const p = at(x, y);
                 if (!p) continue;
                 const i = (y * w + x) * 4;
                 let tone = null;
-                if (p[0] === 0 && p[1] === 0 && p[2] === 0) {
+                if (hair.has(y * w + x)) {
                   const nb = [
                     at(x + 1, y),
                     at(x - 1, y),
                     at(x, y + 1),
                     at(x, y - 1),
                   ];
-                  if (
-                    nb.some(
-                      (n) => n && n[0] === 248 && n[1] === 248 && n[2] === 248,
-                    )
-                  )
-                    continue;
-                  tone = nb.some((n) => !n || n[0] || n[1] || n[2])
-                    ? tones.edge
-                    : tones.fill;
-                } else {
+                  if (nb.some(isWhite)) continue;
+                  tone = nb.some((n) => !isBlack(n)) ? tones.edge : tones.fill;
+                } else if (transformFrame) {
                   const k = yellow[p.join(',')];
                   if (k) tone = tones[k];
                 }
@@ -1412,7 +1439,7 @@
                   out[i + 2] = tone[2];
                 }
               }
-          }
+          });
           const c = document.createElement('canvas');
           c.width = w;
           c.height = h;
@@ -2284,7 +2311,6 @@
           } else if (P.ki >= 20) {
             P.form = next;
             P.transformT = 0.9;
-            P.flying = false;
             showMsg(FORM[next].name + '!', 1.5);
             beep(880, 0.4, 'sawtooth', 0.07);
             G.shake = 6;
