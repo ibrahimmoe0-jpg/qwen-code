@@ -1,0 +1,3102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Super Fury</title>
+    <meta name="claude:viewport-fit-sides" content="cover" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0a12;
+        --fg: #e8e2ff;
+        --muted: #8f88b0;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: 'Courier New', monospace;
+        min-height: 100%;
+      }
+      #wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        padding-block: 12px;
+        padding-left: max(16px, env(safe-area-inset-left, 0px));
+        padding-right: max(16px, env(safe-area-inset-right, 0px));
+      }
+      canvas {
+        width: min(100%, 1080px);
+        aspect-ratio: 3/2;
+        image-rendering: pixelated;
+        background: #000;
+        border: 3px solid #2a2440;
+        border-radius: 4px;
+        outline: none;
+      }
+      #help {
+        max-width: 1080px;
+        width: 100%;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      #help b {
+        color: var(--fg);
+      }
+      kbd {
+        background: #1d1930;
+        border: 1px solid #3a3358;
+        border-radius: 3px;
+        padding: 0 5px;
+        color: var(--fg);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <canvas id="c" width="720" height="480" tabindex="0"></canvas>
+      <div id="help">
+        <b>Move</b> <kbd>WASD</kbd>/<kbd>Arrows</kbd> &nbsp; <b>Punch</b>
+        <kbd>J</kbd> &nbsp; <b>Ki Blast</b> <kbd>K</kbd> (hold for Kamehameha)
+        &nbsp; <b>Dash</b> <kbd>L</kbd> &nbsp; <b>Fly</b> <kbd>F</kbd> &nbsp;
+        <b>Charge Ki</b> hold <kbd>Space</kbd> &nbsp; <b>Transform</b>
+        <kbd>T</kbd> &nbsp; <b>Stats</b> <kbd>Tab</kbd> &nbsp;
+        <b>Talk / Continue</b> <kbd>Enter</kbd><br />
+        Unofficial fan game in the style of Dragon Ball Z: Buu's Fury, following
+        the Dragon Ball Super sagas. All pixel art is original. Dragon Ball is a
+        trademark of its respective owners; this is a non-commercial homage.
+      </div>
+    </div>
+    <script>
+      'use strict';
+      const cv = document.getElementById('c'),
+        ctx = cv.getContext('2d');
+      const W = cv.width,
+        H = cv.height,
+        TS = 48,
+        SC = 3,
+        PAD = 6,
+        SH = 24 + PAD;
+      const keys = {},
+        pressed = {};
+      addEventListener('keydown', (e) => {
+        if (
+          [
+            'ArrowUp',
+            'ArrowDown',
+            'ArrowLeft',
+            'ArrowRight',
+            ' ',
+            'Tab',
+          ].includes(e.key)
+        )
+          e.preventDefault();
+        if (!keys[e.code]) pressed[e.code] = true;
+        keys[e.code] = true;
+      });
+      addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+      });
+      addEventListener('blur', () => {
+        for (const k in keys) keys[k] = false;
+      });
+      const rnd = (a, b) => a + Math.random() * (b - a),
+        clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+      function mulberry(seed) {
+        return function () {
+          seed |= 0;
+          seed = (seed + 0x6d2b79f5) | 0;
+          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      let AC = null;
+      function beep(f, d, type = 'square', vol = 0.04) {
+        try {
+          if (!AC)
+            AC = new (window.AudioContext || window.webkitAudioContext)();
+          const o = AC.createOscillator(),
+            g = AC.createGain(),
+            t = AC.currentTime;
+          o.type = type;
+          o.frequency.setValueAtTime(f, t);
+          o.frequency.exponentialRampToValueAtTime(Math.max(30, f / 3), t + d);
+          g.gain.setValueAtTime(vol, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + d);
+          o.connect(g).connect(AC.destination);
+          o.start();
+          o.stop(t + d);
+        } catch (e) {}
+      }
+
+      // ---------- pixel sprites (16x24 bodies, 3/4 overhead view) ----------
+      const BODY = {
+        down: {
+          idle: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....osesseso....',
+            '....ossssSso....',
+            '....oSssssSo....',
+            '.....oSSSSo.....',
+            '......osso......',
+            '...otttxxttto...',
+            '.otottttttttoto.',
+            '.otottttttttoto.',
+            '.otoTttttttToto.',
+            '.oxottttttttoxo.',
+            '.osobbbbbbbboso.',
+            '...oppppppppo...',
+            '...opppoopppo...',
+            '...opppoopppo...',
+            '...oPppooPppo...',
+            '...oPppooPppo...',
+            '...owwwoowwwo...',
+            '...owwwoowwwo...',
+            '...oooooooooo...',
+          ],
+          attack: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....osesseso....',
+            '....ossssSso....',
+            '....oSssssSo....',
+            '.....oSSSSo.....',
+            '......osso......',
+            '...otttxxttto...',
+            '.otottttttttoto.',
+            '.otottttttttoto.',
+            '.otoTttttttToto.',
+            '.oxottttttttoxo.',
+            '.osobbbbbbbbosso',
+            '...opppppppposso',
+            '...opppoopppo.oo',
+            '...opppoopppo...',
+            '...oPppooPppo...',
+            '...oPppooPppo...',
+            '...owwwoowwwo...',
+            '...owwwoowwwo...',
+            '...oooooooooo...',
+          ],
+        },
+        side: {
+          idle: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....ossssseo....',
+            '....ossssSso....',
+            '....oSsssSso....',
+            '.....oSSSSo.....',
+            '......osso......',
+            '....ottttxto....',
+            '....otttTTto....',
+            '....otttTTto....',
+            '....otttTTto....',
+            '....otttxxto....',
+            '....obbbssbo....',
+            '....oppppppo....',
+            '....oppppppo....',
+            '....oppPoppo....',
+            '....oppPoppo....',
+            '....oPPPoPPo....',
+            '....owwwowwo....',
+            '....owwwowwo....',
+            '....oooooooo....',
+          ],
+          attack: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....ossssseo....',
+            '....ossssSso....',
+            '....oSsssSso....',
+            '.....oSSSSo.....',
+            '......osso......',
+            '....ottttxto....',
+            '....otttttto....',
+            '....otttttttxsso',
+            '....ottttttooooo',
+            '....ottttTto....',
+            '....obbbbbbo....',
+            '....oppppppo....',
+            '....oppppppo....',
+            '....oppPoppo....',
+            '....oppPoppo....',
+            '....oPPPoPPo....',
+            '....owwwowwo....',
+            '....owwwowwo....',
+            '....oooooooo....',
+          ],
+        },
+        up: {
+          idle: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....osssssso....',
+            '....osssssso....',
+            '....oSssssSo....',
+            '.....oSSSSo.....',
+            '......osso......',
+            '...otttttttto...',
+            '.otottttttttoto.',
+            '.otottttttttoto.',
+            '.otoTttttttToto.',
+            '.oxottttttttoxo.',
+            '.osobbbbbbbboso.',
+            '...oppppppppo...',
+            '...opppoopppo...',
+            '...opppoopppo...',
+            '...oPppooPppo...',
+            '...oPppooPppo...',
+            '...owwwoowwwo...',
+            '...owwwoowwwo...',
+            '...oooooooooo...',
+          ],
+          attack: [
+            '................',
+            '................',
+            '.....oooooo.....',
+            '....osssssso....',
+            '....osssssso....',
+            '....ossssssoosso',
+            '....ossssssoosso',
+            '....oSssssSooxxo',
+            '.....oSSSSo.otto',
+            '......osso..otto',
+            '...ottttttttotto',
+            '.otottttttttotto',
+            '.otottttttttoo..',
+            '.otoTttttttTo...',
+            '.oxotttttttto...',
+            '.osobbbbbbbbo...',
+            '...oppppppppo...',
+            '...opppoopppo...',
+            '...opppoopppo...',
+            '...oPppooPppo...',
+            '...oPppooPppo...',
+            '...owwwoowwwo...',
+            '...owwwoowwwo...',
+            '...oooooooooo...',
+          ],
+        },
+      };
+      const HAIR = {
+        bald: {},
+        spiky: {
+          down: {
+            rows: [
+              '....o..oo..o....',
+              '...oho.hh.oho...',
+              '..ohhhohhohhho..',
+              '.ohhhhhhhhhhhho.',
+              '.ohhHhhhhhhHhho.',
+              '..oh........ho..',
+              '...o........o...',
+            ],
+          },
+          side: {
+            rows: [
+              '..o..o..o.......',
+              '.ohoohoohoo.....',
+              '.ohhhhhhhhhoo...',
+              'ohhhhhhhhhhhhho.',
+              '.ohhhhhhhhhhhho.',
+              '.ohhho..........',
+              '..ohho..........',
+              '...oo...........',
+            ],
+          },
+          up: {
+            rows: [
+              '....o..oo..o....',
+              '...oho.hh.oho...',
+              '..ohhhohhohhho..',
+              '.ohhhhhhhhhhhho.',
+              '.ohhhhhhhhhhhho.',
+              '..ohhhhhhhhhho..',
+              '...ohhhhhhhho...',
+              '....ohHHHHho....',
+              '.....oHHHHo.....',
+            ],
+          },
+        },
+        cap: {
+          all: {
+            y0: 1,
+            rows: [
+              '......oooo......',
+              '.....ohhhhho....',
+              '....ohhhhhhho...',
+              '....oHHHHHHHo...',
+            ],
+          },
+          up: {
+            y0: 1,
+            rows: [
+              '......oooo......',
+              '.....ohhhhho....',
+              '....ohhhhhhho...',
+              '....ohhhhhhho...',
+              '....ohhhhhho....',
+              '....oHHHHHHo....',
+              '.....oHHHHo.....',
+            ],
+          },
+        },
+        long: {
+          down: {
+            y0: 1,
+            rows: [
+              '......oooo......',
+              '.....ohhhhho....',
+              '....ohhhhhhho...',
+              '...ohhhhhhhhho..',
+              '..ohho....ohho..',
+              '..ohho....ohho..',
+              '..ohho....ohho..',
+              '..ohho....ohho..',
+              '..ohho....ohho..',
+              '..ohho....ohho..',
+              '...oo......oo...',
+            ],
+          },
+          side: {
+            y0: 1,
+            rows: [
+              '......oooo......',
+              '.....ohhhhho....',
+              '....ohhhhhhhho..',
+              '...ohhhhhhhhho..',
+              '..ohhho.........',
+              '..ohhho.........',
+              '..ohhho.........',
+              '..ohhho.........',
+              '..ohHHo.........',
+              '...ohho.........',
+              '....oo..........',
+            ],
+          },
+          up: {
+            y0: 1,
+            rows: [
+              '......oooo......',
+              '.....ohhhhho....',
+              '....ohhhhhhho...',
+              '...ohhhhhhhhho..',
+              '...ohhhhhhhhho..',
+              '...ohhhhhhhhho..',
+              '...ohhhhhhhhho..',
+              '...ohhhhhhhhho..',
+              '...ohHHHHHHHho..',
+              '....ohhhhhhho...',
+              '.....oooooo.....',
+            ],
+          },
+        },
+        catears: {
+          all: {
+            rows: [
+              '....oo....oo....',
+              '....oho..oho....',
+              '...ohhho.ohhho..',
+              '...oHhho.ohhHo..',
+              '....ooo...ooo...',
+            ],
+          },
+          side: {
+            rows: [
+              '....oo.oo.......',
+              '....ohooho......',
+              '...ohhhohhho....',
+              '...oHhhoHhho....',
+              '....ooo.ooo.....',
+            ],
+          },
+        },
+        longears: {
+          all: {
+            y0: -4,
+            rows: [
+              '....oo....oo....',
+              '....oho..oho....',
+              '....oho..oho....',
+              '....oho..oho....',
+              '....oho..oho....',
+              '....oho..oho....',
+              '...ohhho.ohhho..',
+              '...oHhho.ohhHo..',
+              '....ooo...ooo...',
+            ],
+          },
+          side: {
+            y0: -4,
+            rows: [
+              '....oo.oo.......',
+              '....ohooho......',
+              '....ohooho......',
+              '....ohooho......',
+              '....ohooho......',
+              '....ohooho......',
+              '...ohhhohhho....',
+              '...oHhhoHhho....',
+              '....ooo.ooo.....',
+            ],
+          },
+        },
+        bearears: {
+          all: {
+            y0: 1,
+            rows: [
+              '...ooo....ooo...',
+              '..ohhho..ohhho..',
+              '..ohHho..ohHho..',
+              '...ooo....ooo...',
+            ],
+          },
+        },
+        horns: {
+          all: {
+            rows: [
+              '...oo......oo...',
+              '..ohho....ohho..',
+              '..ohhho..ohhho..',
+              '...ohho..ohho...',
+              '....oo....oo....',
+            ],
+          },
+        },
+        mohawk: {
+          down: {
+            rows: [
+              '......oooo......',
+              '.....ohhhho.....',
+              '.....ohhhho.....',
+              '.....oHhhHo.....',
+              '......oooo......',
+            ],
+          },
+          side: {
+            rows: [
+              '....oooooo......',
+              '...ohhhhhho.....',
+              '...ohhhhhhho....',
+              '....oHhhhhHo....',
+              '.....oooooo.....',
+            ],
+          },
+          up: {
+            rows: [
+              '......oooo......',
+              '.....ohhhho.....',
+              '.....ohhhho.....',
+              '.....ohhhho.....',
+              '.....ohhhho.....',
+              '.....ohhhho.....',
+              '.....oHhhHo.....',
+              '......oooo......',
+            ],
+          },
+        },
+      };
+      const EXTRA = {
+        gem: {
+          down: {
+            y0: 3,
+            rows: [
+              '.......gg.......',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '.......gg.......',
+            ],
+          },
+          side: {
+            y0: 3,
+            rows: [
+              '........gg......',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '................',
+              '........g.......',
+            ],
+          },
+        },
+        mustache: {
+          down: { y0: 7, rows: ['.....mmmmmm.....'] },
+          side: { y0: 7, rows: ['........mmmm....'] },
+        },
+      };
+      (function checkArt() {
+        const bad = [];
+        const chk = (rows, n) =>
+          rows.forEach((r, i) => {
+            if (r.length !== 16) bad.push(n + '#' + i + ':' + r.length);
+          });
+        for (const d in BODY)
+          for (const f in BODY[d]) chk(BODY[d][f], 'body.' + d + '.' + f);
+        for (const h in HAIR)
+          for (const d in HAIR[h]) chk(HAIR[h][d].rows, 'hair.' + h + '.' + d);
+        for (const e in EXTRA)
+          for (const d in EXTRA[e])
+            chk(EXTRA[e][d].rows, 'extra.' + e + '.' + d);
+        if (bad.length) console.warn('sprite rows not 16 wide:', bad);
+      })();
+
+      function shade(hex, k) {
+        const n = parseInt(hex.slice(1), 16);
+        return `rgb(${Math.round((n >> 16) * k)},${Math.round(((n >> 8) & 255) * k)},${Math.round((n & 255) * k)})`;
+      }
+      function makeSpec(o) {
+        const hc = o.hairColor || o.skin;
+        const pal = {
+          o: o.outline || '#1a1020',
+          s: o.skin,
+          S: shade(o.skin, 0.78),
+          t: o.top,
+          T: shade(o.top, 0.78),
+          p: o.pants,
+          P: shade(o.pants, 0.78),
+          b: o.belt || shade(o.pants, 0.6),
+          w: o.boots || o.belt || shade(o.pants, 0.5),
+          x: o.accent || o.belt || o.top,
+          h: hc,
+          H: shade(hc, 0.72),
+          e: '#141414',
+          g: o.gem || '#8040c0',
+          m: '#f4f4f4',
+        };
+        return {
+          pal,
+          hair: o.hair || 'bald',
+          extras: o.extras || [],
+          scale: o.scale || 1,
+          wide: o.wide || 1,
+          key: JSON.stringify([pal, o.hair, o.extras]),
+        };
+      }
+      const spriteCache = new Map();
+      function getSprite(spec, dir, frame, flash) {
+        const key = spec.key + '|' + dir + '|' + frame + '|' + (flash ? 1 : 0);
+        let c = spriteCache.get(key);
+        if (c) return c;
+        const base = BODY[dir][frame === 'attack' ? 'attack' : 'idle'];
+        const g = Array.from({ length: SH }, () => new Array(16).fill('.'));
+        for (let r = 0; r < 24; r++)
+          for (let x = 0; x < 16; x++) g[r + PAD][x] = base[r][x];
+        if (frame === 'walkA' || frame === 'walkB') {
+          const cols =
+            dir === 'side'
+              ? frame === 'walkA'
+                ? [4, 7]
+                : [8, 11]
+              : frame === 'walkA'
+                ? [3, 7]
+                : [8, 12];
+          for (let r = PAD + 16; r < SH - 1; r++)
+            for (let x = cols[0]; x <= cols[1]; x++) g[r][x] = g[r + 1][x];
+          for (let x = cols[0]; x <= cols[1]; x++) g[SH - 1][x] = '.';
+        }
+        const ovs = [];
+        const h = HAIR[spec.hair] || {};
+        if (h[dir] || h.all) ovs.push(h[dir] || h.all);
+        for (const ex of spec.extras) {
+          const o = EXTRA[ex];
+          if (o && (o[dir] || o.all)) ovs.push(o[dir] || o.all);
+        }
+        for (const o of ovs) {
+          const y0 = o.y0 || 0;
+          o.rows.forEach((row, i) => {
+            const r = PAD + y0 + i;
+            if (r < 0 || r >= SH) return;
+            for (let x = 0; x < 16; x++)
+              if (row[x] && row[x] !== '.') g[r][x] = row[x];
+          });
+        }
+        c = document.createElement('canvas');
+        c.width = 16;
+        c.height = SH;
+        const cx = c.getContext('2d');
+        for (let r = 0; r < SH; r++)
+          for (let x = 0; x < 16; x++) {
+            const ch = g[r][x];
+            if (ch === '.') continue;
+            cx.fillStyle = flash ? '#fff' : spec.pal[ch] || '#f0f';
+            cx.fillRect(x, r, 1, 1);
+          }
+        spriteCache.set(key, c);
+        return c;
+      }
+
+      // ---------- data ----------
+      const FORM = [
+        {
+          name: '',
+          dmg: 1,
+          def: 1,
+          spd: 1,
+          drain: 0,
+          hair: '#1a1a1a',
+          aura: null,
+        },
+        {
+          name: 'SUPER SAIYAN',
+          dmg: 1.5,
+          def: 0.8,
+          spd: 1.15,
+          drain: 3,
+          hair: '#ffd820',
+          aura: ['#ffd820', '#ffb000'],
+        },
+        {
+          name: 'SUPER SAIYAN GOD',
+          dmg: 1.9,
+          def: 0.7,
+          spd: 1.3,
+          drain: 5,
+          hair: '#e03030',
+          aura: ['#ff5040', '#ff9060'],
+        },
+        {
+          name: 'SUPER SAIYAN BLUE',
+          dmg: 2.4,
+          def: 0.6,
+          spd: 1.4,
+          drain: 8,
+          hair: '#40a0ff',
+          aura: ['#40a0ff', '#a0e0ff'],
+        },
+        {
+          name: 'ULTRA INSTINCT',
+          dmg: 3,
+          def: 0.5,
+          spd: 1.6,
+          drain: 12,
+          hair: '#d8d8ec',
+          aura: ['#c0c0ff', '#ffffff'],
+          dodge: 0.5,
+        },
+      ];
+      const GOKU = {
+        skin: '#f4c89a',
+        top: '#f08028',
+        pants: '#f08028',
+        belt: '#2a4ad0',
+        boots: '#2a4ad0',
+        accent: '#2a4ad0',
+        hair: 'spiky',
+      };
+      const PINK = '#f090c0';
+      const CAST = {
+        goku: { name: 'Goku', ...GOKU, hairColor: '#1a1a1a' },
+        bulma: {
+          name: 'Bulma',
+          skin: '#f4d0b0',
+          top: '#f0f0f0',
+          pants: '#c03060',
+          belt: '#c03060',
+          hair: 'long',
+          hairColor: '#40c0e0',
+        },
+        whis: {
+          name: 'Whis',
+          skin: '#9ab0e0',
+          top: '#c03060',
+          pants: '#302040',
+          belt: '#d0b040',
+          hair: 'mohawk',
+          hairColor: '#f0f0f8',
+        },
+        sorbet: {
+          name: 'Sorbet',
+          skin: '#80a0d0',
+          top: '#302040',
+          pants: '#302040',
+          belt: '#d0b040',
+          hair: 'cap',
+          hairColor: '#302040',
+        },
+        champa: {
+          name: 'Champa',
+          skin: '#9060c0',
+          top: '#2030a0',
+          pants: '#2030a0',
+          belt: '#e8c040',
+          hair: 'catears',
+          hairColor: '#9060c0',
+          wide: 1.4,
+        },
+        trunks: {
+          name: 'Trunks',
+          skin: '#f4c89a',
+          top: '#2040a0',
+          pants: '#404050',
+          belt: '#404050',
+          hair: 'cap',
+          hairColor: '#b0a0e0',
+        },
+        priest: {
+          name: 'Grand Priest',
+          skin: '#9ab0e0',
+          top: '#302040',
+          pants: '#302040',
+          belt: '#d0b040',
+          hair: 'cap',
+          hairColor: '#f0f0f8',
+        },
+        pilaf: {
+          name: 'Emperor Pilaf',
+          hp: 20,
+          atk: 4,
+          spd: 1.4,
+          exp: 8,
+          ai: 'melee',
+          reach: 30,
+          skin: '#60a0e0',
+          top: '#2a5a9a',
+          pants: '#2a5a9a',
+          belt: '#d0b040',
+          hair: 'cap',
+          hairColor: '#1a3060',
+          scale: 0.75,
+        },
+        shu: {
+          name: 'Shu',
+          hp: 26,
+          atk: 5,
+          spd: 1.6,
+          exp: 10,
+          ai: 'melee',
+          reach: 32,
+          skin: '#c08040',
+          top: '#404850',
+          pants: '#404850',
+          belt: '#c03030',
+          hair: 'catears',
+          hairColor: '#c08040',
+          scale: 0.9,
+        },
+        mai: {
+          name: 'Mai',
+          hp: 24,
+          atk: 6,
+          spd: 1.2,
+          exp: 10,
+          ai: 'ranged',
+          reach: 32,
+          skin: '#f4d0b0',
+          top: '#405040',
+          pants: '#405040',
+          belt: '#202020',
+          hair: 'long',
+          hairColor: '#1a1a1a',
+        },
+        beerus: {
+          name: 'Beerus',
+          boss: true,
+          hp: 320,
+          atk: 16,
+          spd: 1.8,
+          exp: 150,
+          ai: 'melee',
+          reach: 38,
+          moves: ['teleportStrike', 'bigShot', 'charge'],
+          cd: 2.8,
+          unlock: 2,
+          unlockMsg:
+            'Six Saiyans lend their power — SUPER SAIYAN GOD unlocked! Press T to cycle forms.',
+          skin: '#9060c0',
+          top: '#2030a0',
+          pants: '#2030a0',
+          belt: '#e8c040',
+          accent: '#e8c040',
+          hair: 'catears',
+          hairColor: '#9060c0',
+          scale: 1.1,
+        },
+        soldier: {
+          name: 'Frieza Soldier',
+          hp: 40,
+          atk: 8,
+          spd: 1.3,
+          exp: 14,
+          ai: 'melee',
+          reach: 32,
+          skin: '#80a070',
+          top: '#6a3a9a',
+          pants: '#404040',
+          belt: '#d0b040',
+          hair: 'cap',
+          hairColor: '#404040',
+        },
+        tagoma: {
+          name: 'Tagoma',
+          hp: 60,
+          atk: 11,
+          spd: 1.3,
+          exp: 28,
+          ai: 'ranged',
+          reach: 32,
+          skin: '#70a890',
+          top: '#4a2a7a',
+          pants: '#303030',
+          belt: '#d0b040',
+          hair: 'bald',
+        },
+        shisami: {
+          name: 'Shisami',
+          hp: 120,
+          atk: 14,
+          spd: 1.0,
+          exp: 40,
+          ai: 'melee',
+          reach: 40,
+          skin: '#c04040',
+          top: '#4a2a7a',
+          pants: '#303030',
+          belt: '#d0b040',
+          hair: 'horns',
+          hairColor: '#c04040',
+          wide: 1.35,
+          scale: 1.1,
+        },
+        frieza: {
+          name: 'Golden Frieza',
+          boss: true,
+          hp: 520,
+          atk: 21,
+          spd: 2.0,
+          exp: 300,
+          ai: 'melee',
+          reach: 36,
+          moves: ['volley', 'charge', 'bigShot'],
+          cd: 2.6,
+          unlock: 3,
+          unlockMsg: 'Blue hair, god ki — SUPER SAIYAN BLUE unlocked!',
+          skin: '#f0c030',
+          top: '#f0c030',
+          pants: '#6a3a9a',
+          belt: '#6a3a9a',
+          boots: '#6a3a9a',
+          gem: '#6a3a9a',
+          extras: ['gem'],
+          hair: 'bald',
+          scale: 1.05,
+        },
+        botamo: {
+          name: 'Botamo',
+          hp: 220,
+          atk: 14,
+          spd: 1.0,
+          exp: 90,
+          ai: 'melee',
+          reach: 42,
+          meleeImmune: true,
+          skin: '#f0d040',
+          top: '#f0d040',
+          pants: '#c08020',
+          belt: '#c08020',
+          hair: 'bearears',
+          hairColor: '#f0d040',
+          wide: 1.5,
+          scale: 1.15,
+        },
+        frost: {
+          name: 'Frost',
+          hp: 260,
+          atk: 18,
+          spd: 1.7,
+          exp: 110,
+          ai: 'melee',
+          reach: 36,
+          moves: ['stunShot', 'charge'],
+          cd: 3,
+          skin: '#e8f0ff',
+          top: '#e8f0ff',
+          pants: '#3050a0',
+          belt: '#3050a0',
+          boots: '#3050a0',
+          gem: '#3050a0',
+          extras: ['gem'],
+          hair: 'bald',
+        },
+        magetta: {
+          name: 'Auta Magetta',
+          hp: 400,
+          atk: 22,
+          spd: 0.7,
+          exp: 140,
+          ai: 'melee',
+          reach: 46,
+          heavy: true,
+          moves: ['spread'],
+          cd: 3.5,
+          skin: '#8a8a9a',
+          top: '#70707e',
+          pants: '#5a5a6a',
+          belt: '#ff8020',
+          accent: '#ff8020',
+          hair: 'cap',
+          hairColor: '#8a8a9a',
+          wide: 1.6,
+          scale: 1.3,
+        },
+        hit: {
+          name: 'Hit',
+          boss: true,
+          hp: 700,
+          atk: 26,
+          spd: 1.6,
+          exp: 420,
+          ai: 'melee',
+          reach: 38,
+          moves: ['teleportStrike', 'teleportStrike', 'volley'],
+          cd: 2.4,
+          skin: '#9070c0',
+          top: '#5a3a9a',
+          pants: '#5a3a9a',
+          belt: '#2a1a4a',
+          boots: '#2a1a4a',
+          hair: 'bald',
+          scale: 1.15,
+        },
+        blackclone: {
+          name: 'Black Clone',
+          hp: 90,
+          atk: 16,
+          spd: 1.8,
+          exp: 36,
+          ai: 'melee',
+          reach: 34,
+          skin: '#c0a080',
+          top: '#303038',
+          pants: '#606068',
+          belt: '#c03030',
+          hair: 'spiky',
+          hairColor: '#1a1a1a',
+          scale: 0.95,
+        },
+        black: {
+          name: 'Goku Black',
+          boss: true,
+          hp: 900,
+          atk: 30,
+          spd: 2.0,
+          exp: 600,
+          ai: 'melee',
+          reach: 38,
+          moves: ['reach', 'volley', 'teleportStrike'],
+          cd: 2.5,
+          skin: '#f4c89a',
+          top: '#303038',
+          pants: '#606068',
+          belt: '#c03030',
+          hair: 'spiky',
+          hairColor: '#ff80c0',
+        },
+        zamasu: {
+          name: 'Fused Zamasu',
+          boss: true,
+          hp: 1100,
+          atk: 32,
+          spd: 1.5,
+          exp: 800,
+          ai: 'melee',
+          reach: 40,
+          moves: ['bigShot', 'volley', 'reach'],
+          cd: 2.6,
+          regen: 6,
+          skin: '#80c080',
+          top: '#e8e8e8',
+          pants: '#505050',
+          belt: '#c03030',
+          hair: 'mohawk',
+          hairColor: '#f0f0f0',
+          scale: 1.15,
+        },
+        trooper: {
+          name: 'Pride Trooper',
+          hp: 110,
+          atk: 18,
+          spd: 1.6,
+          exp: 40,
+          ai: 'melee',
+          reach: 34,
+          skin: '#d0a080',
+          top: '#c02020',
+          pants: '#202020',
+          belt: '#202020',
+          accent: '#f0f0f0',
+          hair: 'spiky',
+          hairColor: '#303030',
+        },
+        dyspo: {
+          name: 'Dyspo',
+          hp: 160,
+          atk: 20,
+          spd: 2.6,
+          exp: 70,
+          ai: 'melee',
+          reach: 32,
+          moves: ['charge', 'charge'],
+          cd: 2,
+          chargeSpd: 14,
+          skin: '#c080e0',
+          top: '#c02020',
+          pants: '#202020',
+          belt: '#202020',
+          hair: 'longears',
+          hairColor: '#c080e0',
+        },
+        toppo: {
+          name: 'Toppo',
+          boss: true,
+          hp: 1300,
+          atk: 34,
+          spd: 1.4,
+          exp: 900,
+          ai: 'melee',
+          reach: 44,
+          moves: ['charge', 'bigShot', 'reach'],
+          cd: 2.5,
+          skin: '#c0a0d0',
+          top: '#c02020',
+          pants: '#202020',
+          belt: '#202020',
+          accent: '#f0f0f0',
+          hair: 'bald',
+          extras: ['mustache'],
+          wide: 1.45,
+          scale: 1.2,
+        },
+        jiren: {
+          name: 'Jiren',
+          boss: true,
+          hp: 1700,
+          atk: 38,
+          spd: 2.2,
+          exp: 2000,
+          ai: 'melee',
+          reach: 38,
+          moves: ['teleportStrike', 'bigShot', 'volley', 'charge'],
+          cd: 2.1,
+          unlock: 4,
+          unlockMsg: 'The body moves on its own — ULTRA INSTINCT unlocked!',
+          skin: '#a0a0a8',
+          top: '#c02020',
+          pants: '#202020',
+          belt: '#202020',
+          accent: '#f0f0f0',
+          hair: 'bald',
+          scale: 1.25,
+        },
+      };
+      for (const k in CAST) CAST[k].spec = makeSpec(CAST[k]);
+      const gokuSpecs = FORM.map((f) =>
+        makeSpec({ ...GOKU, hairColor: f.hair }),
+      );
+
+      const SAGAS = [
+        {
+          name: 'Battle of Gods',
+          place: 'Capsule Corp Cruise Ship',
+          theme: 'party',
+          mw: 36,
+          mh: 26,
+          roster: { pilaf: 2, shu: 3, mai: 3 },
+          bosses: ['beerus'],
+          intro: [
+            [
+              'beerus',
+              'So this is Earth. Where is the Super Saiyan God I dreamed about?',
+            ],
+            [
+              'goku',
+              "No idea what that is, but if you want a fight, you've got one!",
+            ],
+            [
+              'bulma',
+              'Goku! The Pilaf Gang is raiding my party. Clear them out, then find Beerus by the glowing marker!',
+            ],
+          ],
+          bossTalk: {
+            beerus: [
+              [
+                'beerus',
+                'Pathetic. Show me the god, or I destroy this planet.',
+              ],
+              ['goku', 'Vegeta, Gohan, Trunks, Goten... lend me your power!'],
+            ],
+          },
+          outro: [
+            [
+              'beerus',
+              "Not bad, for a mortal. I'll take a nap before I destroy anything.",
+            ],
+            [
+              'whis',
+              'Son Goku, come train with me. Frieza will not stay dead forever.',
+            ],
+          ],
+        },
+        {
+          name: "Resurrection 'F'",
+          place: 'Northern Wastelands',
+          theme: 'ice',
+          mw: 40,
+          mh: 30,
+          roster: { soldier: 6, tagoma: 2, shisami: 1 },
+          bosses: ['frieza'],
+          intro: [
+            [
+              'sorbet',
+              'Lord Frieza has returned! A thousand soldiers — attack!',
+            ],
+            ['goku', "Frieza's back? Then let's finish this quick."],
+          ],
+          bossTalk: {
+            frieza: [
+              [
+                'frieza',
+                'Behold the fruit of four months of training — GOLDEN FRIEZA!',
+              ],
+              ['goku', "Then I'll go beyond God."],
+            ],
+          },
+          outro: [
+            ['goku', 'Back to Hell, Frieza. And stay there this time.'],
+            ['beerus', 'A tournament against Universe 6. Be ready.'],
+          ],
+        },
+        {
+          name: 'Universe 6 Tournament',
+          place: 'The Nameless Planet',
+          theme: 'arena',
+          mw: 28,
+          mh: 20,
+          roster: { botamo: 1, frost: 1, magetta: 1 },
+          bosses: ['hit'],
+          intro: [
+            [
+              'champa',
+              'Universe 6 versus Universe 7! Botamo, Frost, Magetta — crush them!',
+            ],
+            [
+              'goku',
+              "Botamo's belly bounces punches. Frost hides a needle. Magetta can't be moved. Got it.",
+            ],
+          ],
+          bossTalk: {
+            hit: [
+              ['hit', "I am Hit. I don't lose."],
+              ['goku', 'Time Skip, huh? Then I just have to be faster.'],
+            ],
+          },
+          outro: [
+            [
+              'hit',
+              'Heh. You are interesting, Son Goku. Next time, we finish this.',
+            ],
+            ['trunks', 'Goku... I came from the future. It is dying.'],
+          ],
+        },
+        {
+          name: 'Future Trunks',
+          place: 'A Ruined Future',
+          theme: 'ruins',
+          mw: 40,
+          mh: 30,
+          roster: { blackclone: 7 },
+          bosses: ['black', 'zamasu'],
+          intro: [
+            [
+              'trunks',
+              'Goku Black did all of this. His scythe tears rifts that spawn clones.',
+            ],
+            ['goku', 'Then we cut through the clones and find him.'],
+          ],
+          bossTalk: {
+            black: [
+              [
+                'black',
+                'Ah, Son Goku. Come — let me kill you with your own body.',
+              ],
+            ],
+            zamasu: [
+              ['zamasu', 'Fusion! Behold justice incarnate — FUSED ZAMASU!'],
+              ['goku', 'Immortal or not, you are going down.'],
+            ],
+          },
+          outro: [
+            ['trunks', 'It is over. Thank you, Goku.'],
+            ['priest', 'Son Goku. The Tournament of Power is about to begin.'],
+          ],
+        },
+        {
+          name: 'Tournament of Power',
+          place: 'World of Void',
+          theme: 'void',
+          mw: 40,
+          mh: 30,
+          roster: { trooper: 6, dyspo: 1 },
+          bosses: ['toppo', 'jiren'],
+          intro: [
+            [
+              'priest',
+              'Eight universes. Forty-eight minutes. The losers will be erased.',
+            ],
+            [
+              'toppo',
+              'Pride Troopers, for justice! Goku of Universe 7 is mine!',
+            ],
+          ],
+          bossTalk: {
+            toppo: [
+              [
+                'toppo',
+                'I cast aside justice. I will become a God of Destruction!',
+              ],
+            ],
+            jiren: [
+              ['jiren', 'Your strength is meaningless before me.'],
+              ['goku', "Then I'll go beyond even that."],
+            ],
+          },
+          outro: [
+            ['jiren', '...So this is the power of trusting others.'],
+            ['goku', 'Universe 7 wins! Thanks, Frieza, 17... everyone.'],
+          ],
+        },
+      ];
+      const THEME = {
+        party: {
+          ground: '#c89060',
+          alt: '#a8784a',
+          solid: '#f4f4f4',
+          solidShade: '#c8c8d0',
+          water: '#40a0e0',
+          wall: '#604030',
+          solidKind: 'table',
+        },
+        ice: {
+          ground: '#e8eef4',
+          alt: '#c8d4e0',
+          solid: '#b0d0e8',
+          solidShade: '#80a8c8',
+          water: '#9ac8e8',
+          wall: '#4a5a6a',
+          solidKind: 'rock',
+        },
+        arena: {
+          ground: '#e8dcc0',
+          alt: '#c8bc9c',
+          solid: '#a09070',
+          solidShade: '#706048',
+          water: '#5a3a9a',
+          wall: '#3a2a5a',
+          solidKind: 'pillar',
+        },
+        ruins: {
+          ground: '#606068',
+          alt: '#4a4a52',
+          solid: '#404048',
+          solidShade: '#2a2a30',
+          water: '#60a060',
+          wall: '#202028',
+          solidKind: 'rubble',
+        },
+        void: {
+          ground: '#8a8aa0',
+          alt: '#70708a',
+          solid: '#50507a',
+          solidShade: '#303050',
+          water: '#101020',
+          wall: '#101018',
+          solidKind: 'rock',
+        },
+      };
+
+      // ---------- map ----------
+      const T_GROUND = 0,
+        T_ALT = 1,
+        T_SOLID = 2,
+        T_WATER = 3,
+        T_WALL = 4;
+      let MAP = [],
+        MW = 40,
+        MH = 30;
+      function carve(x0, y0, x1, y1) {
+        const dx = Math.sign(x1 - x0),
+          dy = Math.sign(y1 - y0);
+        let x = x0,
+          y = y0;
+        for (;;) {
+          for (let a = -1; a <= 1; a++)
+            for (let b = -1; b <= 1; b++) {
+              const xx = x + a,
+                yy = y + b;
+              if (
+                xx > 0 &&
+                yy > 0 &&
+                xx < MW - 1 &&
+                yy < MH - 1 &&
+                MAP[yy][xx] >= T_SOLID
+              )
+                MAP[yy][xx] = T_GROUND;
+            }
+          if (x === x1 && y === y1) break;
+          x += dx;
+          y += dy;
+        }
+      }
+      function genMap(saga) {
+        const S = SAGAS[saga],
+          R = mulberry(saga * 7919 + 13);
+        MW = S.mw;
+        MH = S.mh;
+        MAP = Array.from({ length: MH }, (_, y) =>
+          Array.from({ length: MW }, (_, x) =>
+            x === 0 || y === 0 || x === MW - 1 || y === MH - 1
+              ? T_WALL
+              : R() < 0.12
+                ? T_ALT
+                : T_GROUND,
+          ),
+        );
+        const spawn = { x: 3, y: (MH / 2) | 0 },
+          bossPt = { x: MW - 5, y: (MH / 2) | 0 };
+        const n = Math.round(MW * MH * 0.07);
+        for (let i = 0; i < n; i++) {
+          const x = 1 + ((R() * (MW - 2)) | 0),
+            y = 1 + ((R() * (MH - 2)) | 0),
+            t = R() < 0.3 ? T_WATER : T_SOLID,
+            sz = R() < 0.3 ? 2 : 1;
+          for (let dy = 0; dy < sz; dy++)
+            for (let dx = 0; dx < sz; dx++) {
+              const xx = x + dx,
+                yy = y + dy;
+              if (xx >= MW - 1 || yy >= MH - 1) continue;
+              if (
+                Math.hypot(xx - spawn.x, yy - spawn.y) < 5 ||
+                Math.hypot(xx - bossPt.x, yy - bossPt.y) < 5
+              )
+                continue;
+              MAP[yy][xx] = t;
+            }
+        }
+        const mx = 8 + ((R() * (MW - 16)) | 0),
+          my = 3 + ((R() * (MH - 6)) | 0);
+        carve(spawn.x, spawn.y, mx, spawn.y);
+        carve(mx, spawn.y, mx, my);
+        carve(mx, my, bossPt.x, my);
+        carve(bossPt.x, my, bossPt.x, bossPt.y);
+        return { spawn, bossPt, R };
+      }
+      function reachable(sx, sy) {
+        const seen = new Set([sy * MW + sx]),
+          q = [[sx, sy]];
+        while (q.length) {
+          const [x, y] = q.pop();
+          for (const [dx, dy] of [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+          ]) {
+            const nx = x + dx,
+              ny = y + dy;
+            if (
+              nx < 0 ||
+              ny < 0 ||
+              nx >= MW ||
+              ny >= MH ||
+              MAP[ny][nx] >= T_SOLID
+            )
+              continue;
+            const k = ny * MW + nx;
+            if (!seen.has(k)) {
+              seen.add(k);
+              q.push([nx, ny]);
+            }
+          }
+        }
+        return seen;
+      }
+      function tileAt(px, py) {
+        const tx = Math.floor(px / TS),
+          ty = Math.floor(py / TS);
+        if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return T_WALL;
+        return MAP[ty][tx];
+      }
+      function blocked(px, py, fly) {
+        const t = tileAt(px, py);
+        return t === T_SOLID || t === T_WALL || (t === T_WATER && !fly);
+      }
+      function boxFree(x, y, fly) {
+        return (
+          !blocked(x - 9, y - 10, fly) &&
+          !blocked(x + 9, y - 10, fly) &&
+          !blocked(x - 9, y - 1, fly) &&
+          !blocked(x + 9, y - 1, fly)
+        );
+      }
+      function moveEnt(e, dx, dy, fly) {
+        let moved = false;
+        if (dx && boxFree(e.x + dx, e.y, fly)) {
+          e.x += dx;
+          moved = true;
+        }
+        if (dy && boxFree(e.x, e.y + dy, fly)) {
+          e.y += dy;
+          moved = true;
+        }
+        return moved;
+      }
+
+      // ---------- state ----------
+      const G = {
+        state: 'title',
+        saga: 0,
+        enemies: [],
+        projs: [],
+        parts: [],
+        texts: [],
+        drops: [],
+        camX: 0,
+        camY: 0,
+        t: 0,
+        msg: '',
+        msgT: 0,
+        shake: 0,
+        timer: 0,
+        menu: false,
+        kills: 0,
+        bossIdx: 0,
+        bossReady: false,
+        boss: null,
+        bossPt: { x: 0, y: 0 },
+        spawn: { x: 0, y: 0 },
+        dialog: null,
+        unlockMsg: '',
+        unlockT: 0,
+      };
+      let P = newPlayer();
+      window.__G = G;
+      window.__P = () => P;
+
+      function newPlayer() {
+        return {
+          x: 0,
+          y: 0,
+          hp: 100,
+          maxHp: 100,
+          ki: 50,
+          maxKi: 50,
+          lvl: 1,
+          exp: 0,
+          expNext: 40,
+          pts: 0,
+          str: 5,
+          pow: 5,
+          end: 5,
+          spd: 5,
+          form: 0,
+          maxForm: 1,
+          fx: 0,
+          fy: 1,
+          dir: 'down',
+          flip: false,
+          vx: 0,
+          vy: 0,
+          attackT: 0,
+          attackDur: 0,
+          hitDone: true,
+          combo: 0,
+          comboT: 0,
+          dashT: 0,
+          dashCd: 0,
+          inv: 0,
+          stun: 0,
+          hurtT: 0,
+          kHold: 0,
+          kDown: false,
+          charging: false,
+          flying: false,
+          walkT: 0,
+          moving: false,
+          groundX: 0,
+          groundY: 0,
+        };
+      }
+      function setFacing(e, fx, fy) {
+        const l = Math.hypot(fx, fy) || 1;
+        e.fx = fx / l;
+        e.fy = fy / l;
+        if (Math.abs(e.fy) >= Math.abs(e.fx)) e.dir = e.fy > 0 ? 'down' : 'up';
+        else {
+          e.dir = 'side';
+          e.flip = e.fx < 0;
+        }
+      }
+      function startGame() {
+        P = newPlayer();
+        G.kills = 0;
+        startSaga(0);
+      }
+      function startSaga(i) {
+        G.saga = i;
+        const S = SAGAS[i],
+          m = genMap(i);
+        G.enemies = [];
+        G.projs = [];
+        G.parts = [];
+        G.texts = [];
+        G.drops = [];
+        G.bossIdx = 0;
+        G.bossReady = false;
+        G.boss = null;
+        G.menu = false;
+        G.spawn = { x: (m.spawn.x + 0.5) * TS, y: (m.spawn.y + 1) * TS };
+        G.bossPt = { x: (m.bossPt.x + 0.5) * TS, y: (m.bossPt.y + 1) * TS };
+        P.x = G.spawn.x;
+        P.y = G.spawn.y;
+        P.vx = P.vy = 0;
+        P.stun = 0;
+        P.inv = 1;
+        P.hurtT = 0;
+        P.attackT = 0;
+        P.kHold = 0;
+        P.charging = false;
+        P.flying = false;
+        setFacing(P, 1, 0);
+        const reach = reachable(m.spawn.x, m.spawn.y),
+          cells = [...reach]
+            .map((k) => ({ x: k % MW, y: (k / MW) | 0 }))
+            .filter(
+              (c) =>
+                Math.hypot(c.x - m.spawn.x, c.y - m.spawn.y) > 7 &&
+                Math.hypot(c.x - m.bossPt.x, c.y - m.bossPt.y) > 3,
+            );
+        for (const type in S.roster)
+          for (let k = 0; k < S.roster[type]; k++) {
+            const c =
+              cells.splice((m.R() * cells.length) | 0, 1)[0] || m.bossPt;
+            G.enemies.push(makeEnemy(type, (c.x + 0.5) * TS, (c.y + 1) * TS));
+          }
+        G.camX = 0;
+        G.camY = 0;
+        updateCam();
+        G.state = 'play';
+        showDialog(S.intro, null);
+        showMsg(`${S.name} — ${S.place}`, 3);
+      }
+      function makeEnemy(type, x, y) {
+        const d = CAST[type],
+          scale = d.boss ? 1 : 1 + G.saga * 0.3;
+        return {
+          def: d,
+          spec: d.spec,
+          x,
+          y,
+          hx: x,
+          hy: y,
+          hp: Math.round(d.hp * scale),
+          maxHp: Math.round(d.hp * scale),
+          atk: d.atk * (d.boss ? 1 : 1 + G.saga * 0.15),
+          spd: d.spd,
+          regen: d.regen || 0,
+          fx: -1,
+          fy: 0,
+          dir: 'side',
+          flip: true,
+          vx: 0,
+          vy: 0,
+          state: 'idle',
+          timer: rnd(0, 2),
+          cd: 1 + Math.random(),
+          hurtT: 0,
+          walkT: 0,
+          moving: false,
+          struck: false,
+          spT: 0,
+          phase: 0,
+          moveIdx: 0,
+          move: '',
+          hidden: false,
+          telegraph: false,
+          stretch: 0,
+          tx: x,
+          ty: y,
+          aggro: false,
+          id: Math.random(),
+        };
+      }
+      function spawnBoss() {
+        const key = SAGAS[G.saga].bosses[G.bossIdx];
+        const b = makeEnemy(key, G.bossPt.x, G.bossPt.y);
+        b.aggro = true;
+        b.state = 'approach';
+        G.boss = b;
+        G.enemies.push(b);
+        G.bossReady = false;
+        showMsg(`${b.def.name} appears!`, 3);
+        beep(90, 0.6, 'sawtooth', 0.08);
+        G.shake = 8;
+        puff(b.x, b.y - 30, b.def.skin);
+        if (b.def.unlock && P.maxForm < b.def.unlock) {
+          P.maxForm = b.def.unlock;
+          P.ki = P.maxKi;
+          G.unlockMsg = b.def.unlockMsg;
+          G.unlockT = 4;
+        }
+      }
+      function showDialog(lines, after) {
+        if (!lines || !lines.length) {
+          if (after) after();
+          return;
+        }
+        G.dialog = { lines, i: 0, after };
+      }
+      function showMsg(m, t = 2.2) {
+        G.msg = m;
+        G.msgT = t;
+      }
+      function addText(x, y, txt, color) {
+        G.texts.push({ x, y, txt, color, t: 0.9 });
+      }
+      function spark(x, y, color, n = 1) {
+        for (let i = 0; i < n; i++)
+          G.parts.push({
+            x,
+            y,
+            vx: rnd(-3, 3),
+            vy: rnd(-4, 1),
+            t: rnd(0.3, 0.6),
+            color,
+            size: rnd(2, 5),
+          });
+      }
+      function puff(x, y, color) {
+        for (let i = 0; i < 14; i++)
+          G.parts.push({
+            x,
+            y,
+            vx: rnd(-2.5, 2.5),
+            vy: rnd(-2.5, 2.5),
+            t: rnd(0.3, 0.7),
+            color,
+            size: rnd(3, 7),
+          });
+      }
+
+      function meleeDmg() {
+        return (8 + P.str * 2) * FORM[P.form].dmg * (P.combo === 2 ? 1.5 : 1);
+      }
+      function kiDmg() {
+        return (10 + P.pow * 2) * FORM[P.form].dmg;
+      }
+      function moveSpeed() {
+        return (2.2 + P.spd * 0.1) * FORM[P.form].spd * (P.flying ? 1.3 : 1);
+      }
+
+      function gainExp(n) {
+        P.exp += n;
+        addText(P.x, P.y - 80, `+${n} EXP`, '#ffe050');
+        while (P.exp >= P.expNext) {
+          P.exp -= P.expNext;
+          P.lvl++;
+          P.expNext = Math.round(40 * Math.pow(P.lvl, 1.3));
+          P.pts += 4;
+          P.maxHp += 12;
+          P.maxKi += 6;
+          P.hp = P.maxHp;
+          P.ki = P.maxKi;
+          showMsg(
+            `LEVEL UP! Level ${P.lvl} — press TAB to spend stat points`,
+            3,
+          );
+          beep(660, 0.3, 'triangle', 0.06);
+          puff(P.x, P.y - 30, '#ffe050');
+        }
+      }
+      function hitPlayer(raw, dx, dy, stun = 0) {
+        if (P.inv > 0 || P.dashT > 0) return;
+        const l = Math.hypot(dx, dy) || 1;
+        dx /= l;
+        dy /= l;
+        if (FORM[P.form].dodge && Math.random() < FORM[P.form].dodge) {
+          P.inv = 0.25;
+          addText(P.x, P.y - 80, 'DODGED', '#e0e0ff');
+          puff(P.x, P.y - 30, '#d0d0ff');
+          moveEnt(P, dx * 24, dy * 24, P.flying);
+          beep(1200, 0.06, 'triangle', 0.03);
+          return;
+        }
+        const dmg = Math.max(
+          1,
+          Math.round((raw * 1.2 - P.end * 0.6) * FORM[P.form].def),
+        );
+        P.hp -= dmg;
+        P.inv = 0.6;
+        P.hurtT = 0.3;
+        P.vx = dx * 4;
+        P.vy = dy * 4;
+        P.attackT = 0;
+        P.kHold = 0;
+        P.charging = false;
+        if (stun > 0) {
+          P.stun = stun;
+          addText(P.x, P.y - 92, 'POISONED!', '#c0ff60');
+        }
+        addText(P.x, P.y - 76, `-${dmg}`, '#ff6060');
+        spark(P.x, P.y - 30, '#ff6060', 6);
+        beep(120, 0.15, 'sawtooth');
+        G.shake = Math.max(G.shake, 4);
+        if (P.hp <= 0) {
+          P.hp = 0;
+          G.state = 'gameover';
+          G.dialog = null;
+          puff(P.x, P.y - 30, '#f08028');
+          beep(60, 0.8, 'sawtooth', 0.08);
+        }
+      }
+      function dmgEnemy(e, dmg, kb, kind) {
+        if (e.hidden || e.hp <= 0) return;
+        e.aggro = true;
+        if (e.state === 'idle') e.state = 'approach';
+        if (e.def.meleeImmune && kind === 'melee') {
+          addText(e.x, e.y - 80, 'BOUNCED!', '#ffe050');
+          P.vx = -P.fx * 5;
+          P.vy = -P.fy * 5;
+          beep(300, 0.1, 'triangle', 0.04);
+          return;
+        }
+        dmg = Math.max(1, Math.round(dmg));
+        e.hp -= dmg;
+        e.hurtT = 0.2;
+        const dx = e.x - P.x,
+          dy = e.y - P.y,
+          l = Math.hypot(dx, dy) || 1;
+        if (!e.def.heavy) {
+          e.vx = (kb * dx) / l;
+          e.vy = (kb * dy) / l;
+        }
+        if (!e.def.boss && !e.def.heavy && e.state !== 'special')
+          e.state = 'approach';
+        addText(e.x, e.y - 76, `${dmg}`, kind === 'ki' ? '#80d0ff' : '#fff');
+        spark(e.x, e.y - 34, kind === 'ki' ? '#80d0ff' : '#ffe0a0', 5);
+        beep(kind === 'ki' ? 500 : 220, 0.08, 'square', 0.03);
+        if (e.hp <= 0) killEnemy(e);
+      }
+      function killEnemy(e) {
+        e.hp = 0;
+        G.enemies = G.enemies.filter((o) => o !== e);
+        G.kills++;
+        puff(e.x, e.y - 30, e.def.skin);
+        gainExp(e.def.exp);
+        if (!e.def.boss && Math.random() < 0.18)
+          G.drops.push({ x: e.x, y: e.y, t: 14 });
+        const S = SAGAS[G.saga];
+        if (!e.def.boss) {
+          const left = G.enemies.filter((o) => !o.def.boss).length;
+          if (left === 0 && !G.boss && !G.bossReady && G.bossIdx === 0) {
+            G.bossReady = true;
+            showMsg('Area cleared! Head to the glowing marker.', 3.5);
+          }
+          return;
+        }
+        G.boss = null;
+        G.projs = [];
+        G.shake = 12;
+        beep(160, 0.8, 'triangle', 0.08);
+        if (G.bossIdx + 1 < S.bosses.length) {
+          G.bossIdx++;
+          P.hp = Math.min(P.maxHp, P.hp + Math.round(P.maxHp * 0.4));
+          showDialog(S.bossTalk[S.bosses[G.bossIdx]], () => spawnBoss());
+        } else if (G.saga === SAGAS.length - 1) {
+          G.state = 'finisher';
+          G.timer = 0;
+        } else {
+          G.state = 'clear';
+          G.timer = 3;
+        }
+      }
+      function fireAt(e, tx, ty, o) {
+        const sx = e.x,
+          sy = e.y,
+          dx = tx - sx,
+          dy = ty - sy,
+          len = Math.hypot(dx, dy) || 1;
+        const ang = o.ang || 0,
+          c = Math.cos(ang),
+          s = Math.sin(ang),
+          vx = ((dx * c - dy * s) / len) * o.spd,
+          vy = ((dx * s + dy * c) / len) * o.spd;
+        G.projs.push({
+          x: sx + vx * 3,
+          y: sy + vy * 3,
+          vx,
+          vy,
+          r: o.r,
+          dmg: o.dmg,
+          color: o.color,
+          owner: 'e',
+          stun: o.stun || 0,
+          life: 4,
+        });
+      }
+
+      // ---------- update ----------
+      function updatePlayer(dt) {
+        const f = dt * 60;
+        P.walkT += dt;
+        P.moving = false;
+        if (P.inv > 0) P.inv -= dt;
+        if (P.hurtT > 0) P.hurtT -= dt;
+        if (P.dashCd > 0) P.dashCd -= dt;
+        if (P.comboT > 0) P.comboT -= dt;
+        else P.combo = 0;
+        moveEnt(P, P.vx * f, P.vy * f, P.flying);
+        P.vx *= Math.pow(0.8, f);
+        P.vy *= Math.pow(0.8, f);
+        if (P.form > 0) {
+          P.ki -= FORM[P.form].drain * dt;
+          if (P.ki <= 0) {
+            P.ki = 0;
+            P.form = 0;
+            showMsg('Out of ki — reverted to base form');
+          }
+        }
+        if (P.flying) {
+          P.ki -= 4 * dt;
+          if (P.ki <= 0) {
+            P.ki = 0;
+            land();
+          }
+        }
+        if (!P.flying && tileAt(P.x, P.y) !== T_WATER) {
+          P.groundX = P.x;
+          P.groundY = P.y;
+        }
+        if (P.stun > 0) {
+          P.stun -= dt;
+          return;
+        }
+        if (pressed.KeyT) {
+          const next = P.form + 1 > P.maxForm ? 0 : P.form + 1;
+          if (next === 0) {
+            P.form = 0;
+            showMsg('Powered down');
+          } else if (P.ki >= 20) {
+            P.form = next;
+            showMsg(FORM[next].name + '!', 1.5);
+            beep(880, 0.4, 'sawtooth', 0.07);
+            G.shake = 6;
+            puff(P.x, P.y - 30, FORM[next].hair);
+          } else showMsg('Not enough ki to transform (need 20)');
+        }
+        if (pressed.KeyF) {
+          if (P.flying) land();
+          else if (P.ki >= 5) {
+            P.flying = true;
+            showMsg('Flying — crosses water, drains ki', 1.5);
+            beep(500, 0.15, 'triangle', 0.03);
+          } else showMsg('Not enough ki to fly');
+        }
+        if (P.dashT > 0) {
+          P.dashT -= dt;
+          moveEnt(P, P.fx * 9 * f, P.fy * 9 * f, P.flying);
+          if (Math.random() < 0.8)
+            spark(
+              P.x - P.fx * 10,
+              P.y - rnd(5, 40),
+              P.form > 0 ? FORM[P.form].hair : '#fff',
+            );
+        } else if (P.attackT > 0) {
+          P.attackT -= dt;
+          if (!P.hitDone && P.attackT < P.attackDur - 0.08) {
+            P.hitDone = true;
+            let hit = false;
+            for (const e of G.enemies) {
+              const dx = e.x - P.x,
+                dy = e.y - P.y,
+                d = Math.hypot(dx, dy);
+              if (
+                !e.hidden &&
+                d < 38 + e.spec.scale * 14 &&
+                (dx * P.fx + dy * P.fy) / (d || 1) > 0.3
+              ) {
+                hit = true;
+                dmgEnemy(e, meleeDmg(), P.combo === 2 ? 8 : 3, 'melee');
+              }
+            }
+            if (!hit) beep(180, 0.05, 'square', 0.015);
+          }
+        } else {
+          const kame = P.kHold > 0.25;
+          P.charging = !!keys.Space && !kame && !P.flying;
+          if (P.charging) {
+            P.ki = Math.min(P.maxKi, P.ki + 28 * dt);
+            if (Math.random() < 0.6)
+              G.parts.push({
+                x: P.x + rnd(-16, 16),
+                y: P.y - rnd(0, 10),
+                vx: 0,
+                vy: -rnd(2, 4),
+                t: 0.4,
+                color: P.form > 0 ? FORM[P.form].hair : '#80c0ff',
+                size: 3,
+              });
+          } else if (!kame) {
+            const mx =
+              (keys.KeyD || keys.ArrowRight ? 1 : 0) -
+              (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+            const my =
+              (keys.KeyS || keys.ArrowDown ? 1 : 0) -
+              (keys.KeyW || keys.ArrowUp ? 1 : 0);
+            if (mx || my) {
+              P.moving = true;
+              setFacing(P, mx, my);
+              const sp = moveSpeed() * f;
+              moveEnt(P, P.fx * sp, P.fy * sp, P.flying);
+            }
+            if (pressed.KeyL && P.dashCd <= 0) {
+              P.dashT = 0.18;
+              P.dashCd = 0.6;
+              beep(700, 0.1, 'triangle', 0.03);
+            }
+            if (pressed.KeyJ) {
+              if (P.flying) showMsg('Land first to use melee (F)', 1.2);
+              else {
+                P.combo = P.comboT > 0 ? (P.combo + 1) % 3 : 0;
+                P.comboT = 0.6;
+                P.attackDur =
+                  Math.max(0.16, 0.3 - P.spd * 0.004) *
+                  (P.combo === 2 ? 1.3 : 1);
+                P.attackT = P.attackDur;
+                P.hitDone = false;
+              }
+            }
+          }
+          if (keys.KeyK) {
+            P.kDown = true;
+            P.kHold += dt;
+            if (kame && Math.random() < 0.7)
+              G.parts.push({
+                x: P.x + P.fx * 24 + rnd(-6, 6),
+                y: P.y - 26 + P.fy * 10 + rnd(-8, 8),
+                vx: 0,
+                vy: 0,
+                t: 0.15,
+                color: '#80d0ff',
+                size: rnd(2, 6),
+              });
+            if (P.kHold > 0.6 && Math.random() < 0.3)
+              spark(P.x + P.fx * 24, P.y - 26, '#fff');
+          } else if (P.kDown) {
+            P.kDown = false;
+            if (P.kHold >= 0.6 && P.ki >= 40) {
+              P.ki -= 40;
+              G.projs.push({
+                x: P.x + P.fx * 24,
+                y: P.y + P.fy * 10,
+                vx: P.fx * 6.5,
+                vy: P.fy * 6.5,
+                r: 18,
+                dmg: (40 + P.pow * 6) * FORM[P.form].dmg,
+                color: '#60c0ff',
+                owner: 'p',
+                pierce: true,
+                beam: true,
+                hit: new Set(),
+                life: 3,
+              });
+              showMsg('KA-ME-HA-ME-HAAA!', 1.2);
+              beep(200, 0.6, 'sawtooth', 0.08);
+              G.shake = 8;
+              P.attackT = 0.35;
+              P.attackDur = 0.35;
+              P.hitDone = true;
+            } else if (P.ki >= 10) {
+              P.ki -= 10;
+              G.projs.push({
+                x: P.x + P.fx * 20,
+                y: P.y + P.fy * 8,
+                vx: P.fx * 8,
+                vy: P.fy * 8,
+                r: 7,
+                dmg: kiDmg(),
+                color: '#ffe050',
+                owner: 'p',
+                life: 2,
+              });
+              beep(900, 0.08, 'square', 0.03);
+              P.attackT = 0.12;
+              P.attackDur = 0.12;
+              P.hitDone = true;
+            } else showMsg('Not enough ki — hold SPACE to charge');
+            P.kHold = 0;
+          }
+        }
+      }
+      function land() {
+        P.flying = false;
+        if (tileAt(P.x, P.y) === T_WATER || !boxFree(P.x, P.y, false)) {
+          P.x = P.groundX;
+          P.y = P.groundY;
+          puff(P.x, P.y - 20, '#fff');
+        }
+      }
+
+      function updateEnemy(e, dt) {
+        const f = dt * 60;
+        if (e.hurtT > 0) e.hurtT -= dt;
+        moveEnt(e, e.vx * f, e.vy * f, false);
+        e.vx *= Math.pow(0.85, f);
+        e.vy *= Math.pow(0.85, f);
+        if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen * dt);
+        e.timer -= dt;
+        e.cd -= dt;
+        e.walkT += dt;
+        e.moving = false;
+        const dx = P.x - e.x,
+          dy = P.y - e.y,
+          d = Math.hypot(dx, dy) || 1;
+        if (e.state !== 'strike' && e.state !== 'special' && e.state !== 'idle')
+          setFacing(e, dx, dy);
+        const walk = (tx, ty, sp) => {
+          const vx = tx - e.x,
+            vy = ty - e.y,
+            l = Math.hypot(vx, vy) || 1;
+          e.moving = true;
+          if (!moveEnt(e, (vx / l) * sp * f, (vy / l) * sp * f, false)) {
+            moveEnt(e, (-vy / l) * sp * f, (vx / l) * sp * f, false);
+          }
+        };
+        switch (e.state) {
+          case 'idle': {
+            if (d < 230 || e.aggro) {
+              e.aggro = true;
+              e.state = 'approach';
+              break;
+            }
+            if (e.timer <= 0) {
+              e.timer = rnd(1.5, 3.5);
+              e.tx = e.hx + rnd(-80, 80);
+              e.ty = e.hy + rnd(-60, 60);
+            }
+            if (Math.hypot(e.tx - e.x, e.ty - e.y) > 6) {
+              setFacing(e, e.tx - e.x, e.ty - e.y);
+              walk(e.tx, e.ty, e.spd * 0.45);
+            }
+            break;
+          }
+          case 'approach': {
+            if (d > 620 && !e.def.boss) {
+              e.aggro = false;
+              e.state = 'idle';
+              break;
+            }
+            if (e.def.moves && e.cd <= 0 && d < 420) {
+              startSpecial(e);
+              break;
+            }
+            const ranged = e.def.ai === 'ranged',
+              want = ranged ? 170 : e.def.reach - 8;
+            if (d > want) walk(P.x, P.y, e.spd);
+            else if (ranged && d < want - 50) walk(e.x - dx, e.y - dy, e.spd);
+            if (ranged) {
+              if (e.cd <= 0 && d < 320) {
+                e.state = 'windup';
+                e.timer = 0.5;
+                e.cd = 2.2;
+              }
+            } else if (d <= e.def.reach + 4 && e.cd <= 0) {
+              e.state = 'windup';
+              e.timer = 0.45;
+              e.cd = 1.1 + Math.random() * 0.5;
+            }
+            break;
+          }
+          case 'windup':
+            if (e.timer <= 0) {
+              e.state = 'strike';
+              e.timer = 0.25;
+              e.struck = false;
+            }
+            break;
+          case 'strike':
+            if (!e.struck) {
+              e.struck = true;
+              if (e.def.ai === 'ranged') {
+                fireAt(e, P.x, P.y, {
+                  spd: 4.5,
+                  dmg: e.atk,
+                  r: 6,
+                  color: '#c060ff',
+                });
+                beep(300, 0.1, 'square', 0.03);
+              } else if (
+                d <= e.def.reach + 12 &&
+                (dx * e.fx + dy * e.fy) / d > 0
+              )
+                hitPlayer(e.atk, dx, dy);
+            }
+            if (e.timer <= 0) e.state = 'approach';
+            break;
+          case 'special':
+            updateSpecial(e, dt);
+            break;
+        }
+      }
+      function startSpecial(e) {
+        e.state = 'special';
+        e.cd = e.def.cd + Math.random();
+        e.spT = 0;
+        e.phase = 0;
+        e.struck = false;
+        e.telegraph = false;
+        e.move = e.def.moves[e.moveIdx++ % e.def.moves.length];
+      }
+      function updateSpecial(e, dt) {
+        const f = dt * 60;
+        e.spT += dt;
+        const dx = P.x - e.x,
+          dy = P.y - e.y,
+          d = Math.hypot(dx, dy) || 1;
+        const done = () => {
+          e.state = 'approach';
+          e.telegraph = false;
+          e.stretch = 0;
+          e.hidden = false;
+        };
+        switch (e.move) {
+          case 'charge': {
+            const v = e.def.chargeSpd || 9;
+            if (e.spT < 0.5) {
+              e.telegraph = true;
+              setFacing(e, dx, dy);
+            } else if (e.spT < 1.0) {
+              e.telegraph = false;
+              e.moving = true;
+              moveEnt(e, e.fx * v * f, e.fy * v * f, false);
+              if (!e.struck && d < 30) {
+                e.struck = true;
+                hitPlayer(e.atk * 1.4, dx, dy);
+                G.shake = 6;
+              }
+            } else done();
+            break;
+          }
+          case 'reach': {
+            if (e.spT < 0.6) {
+              e.telegraph = true;
+              setFacing(e, dx, dy);
+            } else if (e.phase === 0) {
+              e.phase = 1;
+              e.telegraph = false;
+              e.stretch = 1;
+              if (d < 140 && (dx * e.fx + dy * e.fy) / d > 0.6)
+                hitPlayer(e.atk * 1.3, dx, dy);
+              beep(120, 0.2, 'square', 0.04);
+            } else if (e.spT > 1.0) done();
+            break;
+          }
+          case 'stunShot':
+          case 'spread': {
+            if (e.spT < 0.5) {
+              e.telegraph = true;
+              setFacing(e, dx, dy);
+            } else if (e.phase === 0) {
+              e.phase = 1;
+              e.telegraph = false;
+              if (e.move === 'stunShot') {
+                fireAt(e, P.x, P.y, {
+                  spd: 3.6,
+                  dmg: e.atk * 0.6,
+                  r: 7,
+                  color: '#c0ff60',
+                  stun: 1.4,
+                });
+                beep(200, 0.2, 'square', 0.04);
+              } else {
+                for (let a = -1; a <= 1; a++)
+                  fireAt(e, P.x, P.y, {
+                    spd: 5,
+                    dmg: e.atk * 0.9,
+                    r: 7,
+                    color: '#ff6020',
+                    ang: a * 0.4,
+                  });
+                beep(150, 0.3, 'sawtooth', 0.05);
+              }
+            } else if (e.spT > 0.9) done();
+            break;
+          }
+          case 'teleportStrike': {
+            if (e.phase === 0) {
+              e.phase = 1;
+              e.hidden = true;
+              puff(e.x, e.y - 30, e.def.skin);
+            } else if (e.phase === 1 && e.spT > 0.4) {
+              e.phase = 2;
+              e.hidden = false;
+              let nx = P.x - P.fx * 44,
+                ny = P.y - P.fy * 44;
+              if (!boxFree(nx, ny, false)) {
+                nx = P.x + P.fx * 44;
+                ny = P.y + P.fy * 44;
+              }
+              if (!boxFree(nx, ny, false)) {
+                nx = P.x;
+                ny = P.y;
+              }
+              e.x = nx;
+              e.y = ny;
+              setFacing(e, P.x - e.x || P.fx, P.y - e.y || P.fy);
+              puff(e.x, e.y - 30, e.def.skin);
+              e.telegraph = true;
+            } else if (e.phase === 2 && e.spT > 0.75) {
+              e.phase = 3;
+              e.telegraph = false;
+              if (d < e.def.reach + 20) hitPlayer(e.atk * 1.2, dx, dy);
+              beep(180, 0.15, 'square', 0.04);
+            } else if (e.spT > 1.0) done();
+            break;
+          }
+          case 'volley': {
+            if (e.spT < 0.4) {
+              e.telegraph = true;
+              setFacing(e, dx, dy);
+            } else {
+              e.telegraph = false;
+              const n = Math.floor((e.spT - 0.4) / 0.18) + 1;
+              if (n > e.phase && e.phase < 3) {
+                e.phase++;
+                fireAt(e, P.x, P.y, {
+                  spd: 5.5,
+                  dmg: e.atk * 0.7,
+                  r: 6,
+                  color: '#ff40c0',
+                });
+                beep(400, 0.08, 'square', 0.03);
+              }
+              if (e.spT > 1.2) done();
+            }
+            break;
+          }
+          case 'bigShot': {
+            if (e.spT < 0.9) {
+              e.telegraph = true;
+              setFacing(e, dx, dy);
+              if (Math.random() < 0.5)
+                spark(e.x + rnd(-30, 30), e.y - rnd(10, 80), '#ff80ff');
+            } else if (e.phase === 0) {
+              e.phase = 1;
+              e.telegraph = false;
+              fireAt(e, P.x, P.y, {
+                spd: 3.5,
+                dmg: e.atk * 2,
+                r: 22,
+                color: '#ff40ff',
+              });
+              beep(80, 0.5, 'sawtooth', 0.1);
+              G.shake = 8;
+            } else if (e.spT > 1.3) done();
+            break;
+          }
+          default:
+            done();
+        }
+      }
+      function updateProjs(dt) {
+        const f = dt * 60;
+        for (const p of G.projs) {
+          p.x += p.vx * f;
+          p.y += p.vy * f;
+          p.life -= dt;
+          const t = tileAt(p.x, p.y);
+          if (t === T_SOLID || t === T_WALL) {
+            p.life = 0;
+            spark(p.x, p.y - 20, p.color, 4);
+            continue;
+          }
+          if (p.owner === 'p') {
+            for (const e of G.enemies) {
+              if (e.hidden || e.hp <= 0 || (p.pierce && p.hit.has(e.id)))
+                continue;
+              if (
+                Math.abs(e.x - p.x) < p.r + e.spec.scale * 14 &&
+                Math.abs(e.y - p.y) < p.r + 18
+              ) {
+                dmgEnemy(e, p.dmg, p.beam ? 10 : 2, 'ki');
+                if (p.pierce) p.hit.add(e.id);
+                else {
+                  p.life = 0;
+                  break;
+                }
+              }
+            }
+            if (p.beam)
+              for (const q of G.projs)
+                if (
+                  q.owner === 'e' &&
+                  Math.hypot(q.x - p.x, q.y - p.y) < p.r + q.r + 10
+                ) {
+                  q.life = 0;
+                  spark(q.x, q.y - 20, q.color, 4);
+                }
+          } else if (
+            Math.abs(P.x - p.x) < p.r + 12 &&
+            Math.abs(P.y - p.y) < p.r + 16
+          ) {
+            if (P.inv <= 0 && P.dashT <= 0) {
+              hitPlayer(p.dmg, p.vx, p.vy, p.stun);
+              p.life = 0;
+            }
+          }
+        }
+        G.projs = G.projs.filter((p) => p.life > 0);
+      }
+      function updateMisc(dt) {
+        const f = dt * 60;
+        if (G.msgT > 0) G.msgT -= dt;
+        if (G.unlockT > 0) G.unlockT -= dt;
+        if (G.shake > 0) G.shake = Math.max(0, G.shake - 20 * dt);
+        for (const p of G.parts) {
+          p.x += p.vx * f;
+          p.y += p.vy * f;
+          p.t -= dt;
+        }
+        G.parts = G.parts.filter((p) => p.t > 0);
+        for (const t of G.texts) {
+          t.y -= 30 * dt;
+          t.t -= dt;
+        }
+        G.texts = G.texts.filter((t) => t.t > 0);
+        for (const d of G.drops) {
+          d.t -= dt;
+          if (
+            G.state === 'play' &&
+            !G.dialog &&
+            Math.hypot(d.x - P.x, d.y - P.y) < 24
+          ) {
+            d.t = 0;
+            P.hp = Math.min(P.maxHp, P.hp + Math.round(P.maxHp * 0.5));
+            P.ki = Math.min(P.maxKi, P.ki + Math.round(P.maxKi * 0.5));
+            addText(P.x, P.y - 80, 'SENZU BEAN!', '#80ff80');
+            beep(1000, 0.2, 'triangle', 0.04);
+          }
+        }
+        G.drops = G.drops.filter((d) => d.t > 0);
+      }
+      function handleMenu() {
+        const spend = (k) => {
+          if (P.pts > 0) {
+            P.pts--;
+            P[k]++;
+            if (k === 'pow') {
+              P.maxKi += 3;
+              P.ki += 3;
+            }
+            if (k === 'end') {
+              P.maxHp += 4;
+              P.hp += 4;
+            }
+            beep(520, 0.08, 'triangle', 0.04);
+          }
+        };
+        if (pressed.Digit1) spend('str');
+        if (pressed.Digit2) spend('pow');
+        if (pressed.Digit3) spend('end');
+        if (pressed.Digit4) spend('spd');
+      }
+      function updateCam() {
+        G.camX = clamp(P.x - W / 2, 0, MW * TS - W);
+        G.camY = clamp(P.y - H / 2 - 20, 0, MH * TS - H);
+      }
+      function update(dt) {
+        switch (G.state) {
+          case 'title':
+            if (pressed.Enter) startGame();
+            break;
+          case 'play':
+            if (G.dialog) {
+              updateMisc(dt);
+              if (
+                pressed.Enter ||
+                pressed.KeyJ ||
+                pressed.KeyK ||
+                pressed.Space
+              ) {
+                G.dialog.i++;
+                beep(700, 0.04, 'square', 0.02);
+                if (G.dialog.i >= G.dialog.lines.length) {
+                  const a = G.dialog.after;
+                  G.dialog = null;
+                  if (a) a();
+                }
+              }
+              break;
+            }
+            if (pressed.Tab || pressed.Escape) G.menu = !G.menu;
+            if (G.menu) {
+              handleMenu();
+              break;
+            }
+            updatePlayer(dt);
+            for (const e of G.enemies) updateEnemy(e, dt);
+            updateProjs(dt);
+            updateMisc(dt);
+            if (
+              G.state === 'play' &&
+              G.bossReady &&
+              Math.hypot(P.x - G.bossPt.x, P.y - G.bossPt.y) < 200
+            ) {
+              G.bossReady = false;
+              const S = SAGAS[G.saga];
+              showDialog(S.bossTalk[S.bosses[0]], () => spawnBoss());
+            }
+            updateCam();
+            break;
+          case 'clear':
+            updateMisc(dt);
+            G.timer -= dt;
+            if (G.timer <= 0) {
+              G.state = 'play';
+              showDialog(SAGAS[G.saga].outro, () => {
+                P.hp = P.maxHp;
+                P.ki = P.maxKi;
+                startSaga(G.saga + 1);
+              });
+            }
+            break;
+          case 'finisher':
+            updateMisc(dt);
+            G.timer += dt;
+            if (G.timer > 4) G.state = 'win';
+            break;
+          case 'gameover':
+            if (pressed.Enter) {
+              P.hp = P.maxHp;
+              P.ki = P.maxKi;
+              P.form = 0;
+              startSaga(G.saga);
+            }
+            break;
+          case 'win':
+            if (pressed.Enter) G.state = 'title';
+            break;
+        }
+      }
+
+      // ---------- rendering ----------
+      function px(x, y, w, h, c) {
+        ctx.fillStyle = c;
+        ctx.fillRect(
+          Math.round(x),
+          Math.round(y),
+          Math.round(w),
+          Math.round(h),
+        );
+      }
+      function drawMap() {
+        const T = THEME[SAGAS[G.saga].theme];
+        const x0 = Math.floor(G.camX / TS),
+          y0 = Math.floor(G.camY / TS),
+          x1 = Math.min(MW - 1, x0 + Math.ceil(W / TS) + 1),
+          y1 = Math.min(MH - 1, y0 + Math.ceil(H / TS) + 1);
+        for (let ty = y0; ty <= y1; ty++)
+          for (let tx = x0; tx <= x1; tx++) {
+            const t = MAP[ty][tx],
+              sx = tx * TS - G.camX,
+              sy = ty * TS - G.camY,
+              h = (tx * 73 + ty * 31) % 7;
+            px(sx, sy, TS, TS, T.ground);
+            if (T.solidKind === 'table')
+              px(sx, sy + (ty % 2) * 24, TS, 2, shade(T.ground, 0.85));
+            if (t === T_ALT) {
+              px(sx + 6 + h * 4, sy + 8 + h * 2, 3, 3, T.alt);
+              px(sx + 30 - h, sy + 30, 3, 3, T.alt);
+              px(sx + 18, sy + 22 + h, 2, 2, T.alt);
+            } else if (h === 3) px(sx + 20, sy + 20, 2, 2, T.alt);
+            if (t === T_WALL) {
+              px(sx, sy, TS, TS, T.wall);
+              px(sx, sy, TS, 6, shade(T.wall, 1.6));
+              px(sx + 4, sy + 14, TS - 8, 4, shade(T.wall, 0.7));
+            } else if (t === T_WATER) {
+              px(sx, sy, TS, TS, T.water);
+              const w = Math.sin(G.t * 2 + tx + ty) * 4;
+              px(sx + 8 + w, sy + 14, 16, 3, shade(T.water, 1.3));
+              px(sx + 22 - w, sy + 32, 14, 3, shade(T.water, 1.3));
+            } else if (t === T_SOLID) {
+              if (T.solidKind === 'table') {
+                ctx.fillStyle = '#1a1020';
+                ctx.beginPath();
+                ctx.ellipse(sx + 24, sy + 30, 22, 13, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = T.solid;
+                ctx.beginPath();
+                ctx.ellipse(sx + 24, sy + 26, 20, 11, 0, 0, Math.PI * 2);
+                ctx.fill();
+                px(sx + 14, sy + 14, 8, 8, '#f06080');
+                px(sx + 26, sy + 16, 10, 6, '#ffe050');
+              } else if (T.solidKind === 'pillar') {
+                px(sx + 10, sy - 10, 28, 52, '#1a1020');
+                px(sx + 12, sy - 8, 24, 48, T.solid);
+                px(sx + 12, sy - 8, 8, 48, shade(T.solid, 1.15));
+                px(sx + 6, sy - 14, 36, 8, T.solidShade);
+              } else if (T.solidKind === 'rubble') {
+                px(sx + 2, sy + 10, 44, 34, '#1a1020');
+                px(sx + 4, sy + 12, 40, 30, T.solid);
+                px(sx + 8, sy + 4, 18, 12, T.solidShade);
+                px(sx + 28, sy + 18, 12, 8, shade(T.solid, 1.3));
+              } else {
+                ctx.fillStyle = '#1a1020';
+                ctx.beginPath();
+                ctx.ellipse(sx + 24, sy + 28, 22, 18, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = T.solid;
+                ctx.beginPath();
+                ctx.ellipse(sx + 24, sy + 24, 20, 16, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = shade(T.solid, 1.2);
+                ctx.beginPath();
+                ctx.ellipse(sx + 18, sy + 18, 8, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
+          }
+        if (G.bossReady) {
+          const x = G.bossPt.x - G.camX,
+            y = G.bossPt.y - G.camY,
+            r = 22 + Math.sin(G.t * 5) * 5;
+          ctx.globalAlpha = 0.6;
+          ctx.fillStyle = '#ffe050';
+          ctx.beginPath();
+          ctx.ellipse(x, y, r, r * 0.45, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          for (let i = 0; i < 3; i++)
+            px(
+              x - 3 + Math.sin(G.t * 4 + i * 2) * 14,
+              y - 20 - ((G.t * 40 + i * 20) % 50),
+              4,
+              4,
+              '#ffe050',
+            );
+        }
+      }
+      function drawEntity(e, isPlayer) {
+        if (e.hidden) return;
+        const spec = isPlayer ? gokuSpecs[P.form] : e.spec,
+          sx = SC * spec.scale * spec.wide,
+          sy = SC * spec.scale;
+        const x = e.x - G.camX,
+          y = e.y - G.camY,
+          lift = isPlayer && P.flying ? 18 + Math.sin(G.t * 4) * 3 : 0;
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.beginPath();
+        ctx.ellipse(x, y - 2, (10 * sx) / SC, (4 * sy) / SC, 0, 0, Math.PI * 2);
+        ctx.fill();
+        if (isPlayer && P.form > 0) {
+          const A = FORM[P.form].aura;
+          ctx.globalAlpha = 0.45;
+          for (let i = 0; i < 7; i++) {
+            const a = G.t * 20 + i * 1.7,
+              ox = Math.sin(a) * 16,
+              h = 40 + Math.sin(a * 1.3) * 12 + P.form * 4;
+            px(x + ox - 6, y - lift - h - 30, 12, h, A[i % 2]);
+          }
+          ctx.globalAlpha = 1;
+          if (P.form === 4 && Math.random() < 0.3)
+            spark(e.x + rnd(-24, 24), e.y - rnd(0, 70), '#ffffff');
+        }
+        if (e.telegraph) {
+          ctx.globalAlpha = 0.35 + 0.3 * Math.sin(G.t * 30);
+          ctx.fillStyle = '#ff4040';
+          ctx.beginPath();
+          ctx.ellipse(
+            x,
+            y - (36 * sy) / SC,
+            (24 * sx) / SC,
+            (40 * sy) / SC,
+            0,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        const flash = e.hurtT > 0 && Math.floor(e.hurtT * 30) % 2 === 0;
+        const attacking = isPlayer
+          ? P.attackT > 0 && !P.flying
+          : e.state === 'strike' || e.stretch > 0 || e.state === 'windup';
+        const frame = attacking
+          ? 'attack'
+          : e.moving
+            ? Math.floor(e.walkT * 7) % 2
+              ? 'walkA'
+              : 'walkB'
+            : 'idle';
+        const img = getSprite(spec, e.dir, frame, flash);
+        ctx.save();
+        ctx.translate(Math.round(x), Math.round(y - lift));
+        ctx.scale(e.flip ? -sx : sx, sy);
+        if (isPlayer && P.stun > 0) ctx.filter = 'sepia(1) hue-rotate(60deg)';
+        ctx.drawImage(img, -8, -SH);
+        ctx.restore();
+        ctx.filter = 'none';
+        if (e.stretch > 0) {
+          const L = 90;
+          px(
+            Math.min(x, x + e.fx * L) - 4,
+            y - 30 + Math.min(0, e.fy * L) - 4,
+            Math.abs(e.fx * L) + 8,
+            Math.abs(e.fy * L) + 8,
+            '#1a1020',
+          );
+          px(
+            Math.min(x, x + e.fx * L),
+            y - 30 + Math.min(0, e.fy * L),
+            Math.abs(e.fx * L) + 2,
+            Math.abs(e.fy * L) + 2,
+            '#c040ff',
+          );
+        }
+        if (!isPlayer && (e.hp < e.maxHp || e.aggro)) {
+          const w = 34 * spec.scale,
+            hy = y - SH * sy - 8;
+          bar(
+            x - w / 2,
+            hy,
+            w,
+            4,
+            e.hp,
+            e.maxHp,
+            e.def.boss ? '#ff4060' : '#50e050',
+            '#300',
+          );
+        }
+      }
+      function drawProjs() {
+        for (const p of G.projs) {
+          const x = p.x - G.camX,
+            y = p.y - G.camY - 20;
+          if (p.beam) {
+            const ang = Math.atan2(p.vy, p.vx),
+              len = 120;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(ang);
+            ctx.globalAlpha = 0.5;
+            px(-len, -p.r, len, p.r * 2, '#60c0ff');
+            ctx.globalAlpha = 1;
+            px(-len, -p.r * 0.5, len, p.r, '#e0f8ff');
+            ctx.fillStyle = '#e0f8ff';
+            ctx.beginPath();
+            ctx.arc(0, 0, p.r * 1.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 0.4;
+            ctx.fillStyle = '#60c0ff';
+            ctx.beginPath();
+            ctx.arc(0, 0, p.r * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            ctx.globalAlpha = 1;
+          } else {
+            ctx.globalAlpha = 0.45;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(x, y, p.r * 1.7, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, p.r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(x, y, p.r * 0.45, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      function bar(x, y, w, h, v, max, c, bg = '#222') {
+        px(x, y, w, h, bg);
+        px(x, y, Math.max(0, w * clamp(v / max, 0, 1)), h, c);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(
+          Math.round(x) + 0.5,
+          Math.round(y) + 0.5,
+          Math.round(w),
+          h,
+        );
+      }
+      function text(
+        t,
+        x,
+        y,
+        size = 14,
+        color = '#fff',
+        align = 'left',
+        bold = true,
+      ) {
+        ctx.font = `${bold ? 'bold ' : ''}${size}px "Courier New",monospace`;
+        ctx.textAlign = align;
+        ctx.fillStyle = '#000';
+        ctx.fillText(t, x + 1, y + 1);
+        ctx.fillStyle = color;
+        ctx.fillText(t, x, y);
+      }
+      function panel(x, y, w, h) {
+        ctx.fillStyle = 'rgba(8,6,20,0.88)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#8060ff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+      }
+      function wrapText(s, x, y, maxW, lh) {
+        const words = s.split(' ');
+        let line = '';
+        for (const w of words) {
+          const t = line + w + ' ';
+          if (ctx.measureText(t).width > maxW && line) {
+            ctx.fillText(line, x, y);
+            line = w + ' ';
+            y += lh;
+          } else line = t;
+        }
+        ctx.fillText(line, x, y);
+      }
+      function drawHUD() {
+        text(
+          `GOKU  Lv ${P.lvl}${P.form > 0 ? '  ' + FORM[P.form].name : ''}`,
+          14,
+          22,
+          14,
+          P.form > 0 ? FORM[P.form].hair : '#fff',
+        );
+        bar(
+          14,
+          30,
+          200,
+          12,
+          P.hp,
+          P.maxHp,
+          P.hp < P.maxHp * 0.25 ? '#ff5050' : '#50e050',
+        );
+        text(`HP ${Math.ceil(P.hp)}/${P.maxHp}`, 16, 40, 10);
+        bar(14, 46, 200, 10, P.ki, P.maxKi, '#50a0ff');
+        text(`KI ${Math.floor(P.ki)}/${P.maxKi}`, 16, 54, 9);
+        bar(14, 60, 200, 4, P.exp, P.expNext, '#ffe050');
+        let hy = 80;
+        if (P.pts > 0) {
+          text(`${P.pts} stat points — press TAB`, 14, hy, 11, '#ffe050');
+          hy += 16;
+        }
+        text(
+          `Forms [T]: ${FORM.slice(1, P.maxForm + 1)
+            .map((f) => f.name.replace('SUPER SAIYAN', 'SS'))
+            .join(' > ')}${P.flying ? '   FLYING' : ''}`,
+          14,
+          hy,
+          10,
+          '#aaa',
+        );
+        if (P.kHold > 0.25)
+          bar(
+            P.x - G.camX - 25,
+            P.y - G.camY + 8,
+            50,
+            5,
+            Math.min(P.kHold, 0.6),
+            0.6,
+            P.kHold >= 0.6 ? '#fff' : '#60c0ff',
+          );
+        const S = SAGAS[G.saga];
+        if (G.boss) {
+          text(G.boss.def.name, W - 14, 22, 14, '#ff8080', 'right');
+          bar(W - 254, 30, 240, 12, G.boss.hp, G.boss.maxHp, '#ff4060');
+        } else {
+          const left = G.enemies.filter((e) => !e.def.boss).length;
+          text(
+            G.bossReady
+              ? 'Go to the glowing marker'
+              : `Enemies remaining: ${left}`,
+            W - 14,
+            22,
+            12,
+            '#ffe050',
+            'right',
+          );
+        }
+        if (G.bossReady || G.boss) {
+          const tx = (G.boss ? G.boss.x : G.bossPt.x) - G.camX,
+            ty = (G.boss ? G.boss.y : G.bossPt.y) - G.camY;
+          if (tx < 0 || tx > W || ty < 0 || ty > H) {
+            const ax = clamp(tx, 20, W - 20),
+              ay = clamp(ty, 70, H - 30),
+              a = Math.atan2(ty - ay, tx - ax);
+            ctx.save();
+            ctx.translate(ax, ay);
+            ctx.rotate(a);
+            ctx.fillStyle = '#ffe050';
+            ctx.beginPath();
+            ctx.moveTo(12, 0);
+            ctx.lineTo(-8, -8);
+            ctx.lineTo(-8, 8);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+        if (!G.dialog)
+          text(
+            `Saga ${G.saga + 1}/${SAGAS.length}  ${S.name} — ${S.place}`,
+            W - 14,
+            H - 10,
+            11,
+            '#ddd',
+            'right',
+          );
+        if (G.msgT > 0 && !G.dialog) {
+          ctx.globalAlpha = Math.min(1, G.msgT * 2);
+          text(G.msg, W / 2, H - 34, 15, '#fff', 'center');
+          ctx.globalAlpha = 1;
+        }
+        if (G.unlockT > 0 && !G.dialog) {
+          ctx.globalAlpha = Math.min(1, G.unlockT);
+          panel(60, 90, W - 120, 50);
+          text(G.unlockMsg, W / 2, 121, 13, '#ffe050', 'center');
+          ctx.globalAlpha = 1;
+        }
+      }
+      function drawDialog() {
+        const d = G.dialog,
+          [who, line] = d.lines[d.i],
+          c = CAST[who];
+        panel(10, H - 118, W - 20, 108);
+        px(22, H - 108, 88, 88, '#201838');
+        const spec = who === 'goku' ? gokuSpecs[P.form] : c.spec,
+          img = getSprite(spec, 'down', 'idle', false);
+        ctx.save();
+        ctx.translate(66, H - 24);
+        ctx.scale(3.4 * spec.wide, 3.4);
+        ctx.drawImage(img, -8, -SH);
+        ctx.restore();
+        text(c.name, 124, H - 90, 15, '#ffe050');
+        ctx.font = '14px "Courier New",monospace';
+        ctx.fillStyle = '#eee';
+        ctx.textAlign = 'left';
+        wrapText(line, 124, H - 66, W - 160, 20);
+        if (Math.floor(G.t * 3) % 2 === 0)
+          text('▼ ENTER', W - 26, H - 20, 11, '#aaa', 'right');
+      }
+      function drawMenu() {
+        panel(160, 90, 400, 300);
+        text('STAT POINTS', W / 2, 125, 22, '#ffe050', 'center');
+        text(`Points to spend: ${P.pts}`, W / 2, 152, 14, '#fff', 'center');
+        const rows = [
+          ['1', 'STRENGTH', P.str, 'melee damage'],
+          ['2', 'POWER', P.pow, 'ki damage, max ki'],
+          ['3', 'ENDURANCE', P.end, 'damage taken, max HP'],
+          ['4', 'SPEED', P.spd, 'movement, attack rate'],
+        ];
+        rows.forEach((r, i) => {
+          const y = 195 + i * 38;
+          text(`[${r[0]}]`, 185, y, 16, '#8060ff');
+          text(r[1], 225, y, 15);
+          text(String(r[2]), 345, y, 16, '#ffe050');
+          text(r[3], 385, y, 11, '#aaa');
+        });
+        text('TAB / ESC to close', W / 2, 365, 12, '#aaa', 'center');
+      }
+      function drawTitle() {
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, '#2a1050');
+        g.addColorStop(1, '#0b0a12');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        for (let i = 0; i < 80; i++)
+          px(
+            (i * 137) % W,
+            (i * 71) % H,
+            2,
+            2,
+            `rgba(255,255,255,${0.3 + 0.5 * Math.abs(Math.sin(G.t + i))})`,
+          );
+        text('DRAGON WARRIOR SAGA', W / 2, 110, 16, '#ffe050', 'center');
+        text('SUPER FURY', W / 2, 165, 48, '#60c0ff', 'center');
+        text(
+          "An unofficial fan game in the style of Buu's Fury — the Dragon Ball Super sagas",
+          W / 2,
+          195,
+          13,
+          '#bbb',
+          'center',
+        );
+        const show = (spec, x, y, dir, flip, sc) => {
+          const img = getSprite(spec, dir, 'idle', false);
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.scale(flip ? -sc * spec.wide : sc * spec.wide, sc);
+          ctx.drawImage(img, -8, -SH);
+          ctx.restore();
+        };
+        show(gokuSpecs[0], 250, 330, 'side', false, 4);
+        show(CAST.beerus.spec, 470, 330, 'side', true, 4.2);
+        if (Math.floor(G.t * 2) % 2 === 0)
+          text('PRESS ENTER', W / 2, 400, 20, '#fff', 'center');
+        text(
+          'Battle of Gods  ·  Resurrection F  ·  Universe 6  ·  Future Trunks  ·  Tournament of Power',
+          W / 2,
+          440,
+          12,
+          '#aaa',
+          'center',
+        );
+      }
+      function drawBanner(title, sub, color) {
+        panel(60, 150, W - 120, 180);
+        text(title, W / 2, 215, 30, color, 'center');
+        ctx.font = '14px "Courier New",monospace';
+        ctx.fillStyle = '#ddd';
+        ctx.textAlign = 'center';
+        wrapText(sub, W / 2, 250, W - 170, 20);
+      }
+      function drawWorld() {
+        ctx.save();
+        if (G.shake > 0)
+          ctx.translate(rnd(-G.shake, G.shake), rnd(-G.shake, G.shake));
+        drawMap();
+        for (const d of G.drops) {
+          const x = d.x - G.camX,
+            y = d.y - G.camY - 8 - Math.abs(Math.sin(G.t * 4)) * 6;
+          px(x - 5, y - 4, 10, 7, '#1a1020');
+          px(x - 4, y - 3, 8, 5, '#80e060');
+          px(x - 2, y - 5, 4, 2, '#50a040');
+        }
+        const ents = [
+          ...G.enemies.map((e) => ({ e, p: false })),
+          { e: P, p: true },
+        ].sort((a, b) => a.e.y - b.e.y);
+        for (const o of ents) drawEntity(o.e, o.p);
+        drawProjs();
+        for (const p of G.parts) {
+          ctx.globalAlpha = clamp(p.t * 2, 0, 1);
+          px(p.x - G.camX, p.y - G.camY, p.size, p.size, p.color);
+        }
+        ctx.globalAlpha = 1;
+        for (const t of G.texts)
+          text(t.txt, t.x - G.camX, t.y - G.camY, 13, t.color, 'center');
+        ctx.restore();
+      }
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+        if (G.state === 'title') {
+          drawTitle();
+          return;
+        }
+        drawWorld();
+        if (G.state === 'finisher') {
+          const t = G.timer,
+            x = P.x - G.camX,
+            y = P.y - G.camY - 30;
+          if (t < 2.6) {
+            const r = 20 + t * 260;
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = '#60c0ff';
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 0.9;
+            ctx.fillStyle = '#e8f8ff';
+            ctx.beginPath();
+            ctx.arc(x, y, r * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            text(
+              'UNIVERSE 7 — FINAL PUSH!',
+              W / 2,
+              100,
+              28,
+              '#80d0ff',
+              'center',
+            );
+          } else {
+            ctx.globalAlpha = clamp(1 - (t - 2.6) / 1.4, 0, 1);
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, W, H);
+            ctx.globalAlpha = 1;
+          }
+        }
+        drawHUD();
+        const S = SAGAS[G.saga];
+        if (G.state === 'clear')
+          drawBanner(
+            'SAGA COMPLETE!',
+            `${S.name} is over. Full recovery granted.`,
+            '#80ff80',
+          );
+        else if (G.state === 'gameover')
+          drawBanner(
+            'YOU HAVE FALLEN',
+            `${S.name}. Your level, stats and forms are kept. Press ENTER to try again.`,
+            '#ff6060',
+          );
+        else if (G.state === 'win')
+          drawBanner(
+            'UNIVERSE 7 WINS!',
+            `Jiren is knocked out of the ring and the Tournament of Power is over. Goku reached level ${P.lvl} and defeated ${G.kills} fighters. Press ENTER for the title screen.`,
+            '#ffe050',
+          );
+        if (G.dialog && G.state === 'play') drawDialog();
+        if (G.menu && G.state === 'play') drawMenu();
+      }
+
+      let last = 0;
+      function loop(ts) {
+        const dt = Math.min(0.05, (ts - last) / 1000 || 0);
+        last = ts;
+        G.t += dt;
+        update(dt);
+        draw();
+        for (const k in pressed) pressed[k] = false;
+        requestAnimationFrame(loop);
+      }
+      ctx.imageSmoothingEnabled = false;
+      cv.focus();
+      requestAnimationFrame(loop);
+    </script>
+  </body>
+</html>
