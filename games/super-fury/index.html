@@ -1317,13 +1317,15 @@
         },
         windup: { down: 36, side: 49, up: 61 },
         hit: { down: [37, 38, 46], side: [50, 51, 54], up: [62, 63, 66] },
-        hurt: { down: 74, side: 77, up: 80 },
-        kiCharge: { down: 91, side: 94, up: 97 },
-        kiFire: { down: 92, side: 95, up: 98 },
+        hurt: { down: 137, side: 140, up: 143 },
+        dizzy: { down: 136, side: 139, up: 142 },
+        kiCharge: { down: 73, side: 76, up: 79 },
+        kiFire: { down: 75, side: 77, up: 80 },
+        kameCharge: { down: 91, side: 94, up: 97 },
+        kameFire: { down: 93, side: 95, up: 98 },
         charge: { down: 115, side: 118, up: 121 },
-        fly: { down: [136, 137, 138], side: [146], up: [142, 143, 144] },
+        fly: { down: [151], side: [153, 154], up: [157] },
         transform: [124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135],
-        dizzy: 150,
         lying: 147,
         kiBall: [101, 106, 111],
         beamH: [108, 109],
@@ -1454,16 +1456,17 @@
           return A.transform[
             Math.min(11, Math.floor((1 - P.transformT / 0.9) * 12))
           ];
-        if (P.stun > 0) return A.dizzy;
+        if (P.stun > 0) return A.dizzy[d];
         if (P.hurtT > 0) return A.hurt[d];
         if (P.flying || P.dashT > 0) return cycle(A.fly[d], G.t, 8);
         if (P.attackT > 0) {
-          if (P.attackKind !== 'melee') return A.kiFire[d];
+          if (P.attackKind === 'kame') return A.kameFire[d];
+          if (P.attackKind === 'ki') return A.kiFire[d];
           return P.attackT > P.attackDur * 0.6
             ? A.windup[d]
             : A.hit[d][P.combo];
         }
-        if (P.kHold > 0.25) return A.charge[d];
+        if (P.kHold > 0.25) return A.kameCharge[d];
         if (P.charging) return A.charge[d];
         if (P.kDown) return A.kiCharge[d];
         if (P.moving)
