@@ -6,4 +6,4 @@ An unofficial, non-commercial fan game in the style of _Dragon Ball Z: Buu's Fur
 - **Controls**: WASD/Arrows move, J punch, K ki blast (hold for Kamehameha), L dash, F fly, Space charge ki, T transform, Tab stat points, Enter talk/continue
 - **Progression**: EXP and levels with Strength / Power / Endurance / Speed points; Super Saiyan from the start, God, Blue and Ultra Instinct unlocked as the story reaches them
 
-All pixel art is original. Dragon Ball is a trademark of its respective owners.
+Goku's sprites are from the GBA game (ripped by Grim, sdb.neuropod.net); all other pixel art is original. Dragon Ball is a trademark of its respective owners.
